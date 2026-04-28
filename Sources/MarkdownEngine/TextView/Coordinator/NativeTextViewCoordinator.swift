@@ -1,0 +1,212 @@
+//
+//  NativeTextViewCoordinator.swift
+//  Nodes
+//
+//  Created by Luca Chen on 18.02.26.
+//
+
+// Keeps the editor in sync while you type, updating formatting, selections,
+// links, and other editing behavior in one place.
+import AppKit
+import SwiftUI
+
+public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
+    var nodeId: String?
+    @Binding var text: String
+    @Binding var isNodeActive: Bool
+    var fontName: String
+    var fontSize: CGFloat
+    var configuration: MarkdownEditorConfiguration = .default {
+        didSet { subscribeToBusNotifications(replacing: oldValue.services.bus) }
+    }
+    private var busObservers: [NSObjectProtocol] = []
+    weak var textView: NSTextView?
+    var layoutBridge: LayoutBridge?
+    var layoutDelegate: MarkdownLayoutManagerDelegate?
+    var onLinkClick: ((String) -> Void)?
+    var onCaretRectChange: ((CGRect) -> Void)?
+    var onInlineSelectionChange: ((InlineSelectionState?) -> Void)?
+    var onCodeBlockSelectionChange: (([CodeBlockSelection]) -> Void)?
+    var didInitialFormatting: Bool = false
+    var lastSyncedText: String
+    var isProgrammaticEdit: Bool = false
+    var isWritingToolsActive: Bool = false
+    var wtStartNodeId: String?
+    weak var wtChildWindow: NSWindow?
+    var wtInitialChildOrigin: CGPoint?
+    var wtInitialSelectionRange: NSRange?
+    enum WTMode { case unknown, proofread, rewrite }
+    var wtDetectedMode: WTMode = .unknown
+    var lastAppliedInlineReplacementID: UUID?
+    var activeTokenIndices: Set<Int> = []
+    var previousActiveTokenIndices: Set<Int> = []
+    var nodeLinkMetadata: [WikiLinkService.RangeKey: WikiLinkService.LinkMetadata] = [:]
+    var previousBacktickCount: Int = 0
+
+    var pendingEditedRange: NSRange? = nil
+    var pendingPreEditActiveTokenIndices: Set<Int>? = nil
+    var previousCaretLocation: Int? = nil
+
+    var cachedCodeBlockTokens: [(index: Int, token: MarkdownToken)] = []
+    var cachedParsedText: String?
+    var cachedParsedDocument: ParsedDocument?
+    // Skip spellcheck property setters when the state wouldn't change.
+    var cachedSpellingDisabled: Bool?
+
+    struct ParsedDocument {
+        let tokens: [MarkdownToken]
+        let codeTokens: [MarkdownToken]
+        let latexTokens: [MarkdownToken]
+        let blockLatexTokens: [MarkdownToken]
+        let nodeLinkTokens: [MarkdownToken]
+        let imageEmbedTokens: [MarkdownToken]
+    }
+
+    enum InlineTokenContext {
+        case nodeLink(token: MarkdownToken)
+        case imageEmbed(token: MarkdownToken)
+
+        var token: MarkdownToken {
+            switch self {
+            case .nodeLink(let token), .imageEmbed(let token):
+                return token
+            }
+        }
+
+        var selectionKind: InlineSelectionKind {
+            switch self {
+            case .nodeLink:
+                return .nodeLink
+            case .imageEmbed:
+                return .imageEmbed
+            }
+        }
+    }
+
+    var isImageEmbedActive: Bool = false
+    var suppressFrameShrink: Bool = false
+
+    // Inline selection geometry, image-embed activation, and inline-token
+    // detection live in `NativeTextViewCoordinator+InlineSelection.swift`.
+
+    init(text: Binding<String>,
+         fontName: String,
+         fontSize: CGFloat,
+         isNodeActive: Binding<Bool>,
+         onLinkClick: ((String) -> Void)?,
+         onInlineSelectionChange: ((InlineSelectionState?) -> Void)?) {
+        _text = text
+        self.fontName = fontName
+        self.fontSize = fontSize
+        _isNodeActive = isNodeActive
+        self.onLinkClick = onLinkClick
+        self.onCaretRectChange = nil
+        self.onInlineSelectionChange = onInlineSelectionChange
+        self.lastSyncedText = text.wrappedValue
+        super.init()
+        // The syntax-highlighter's appearance signal name comes from the
+        // service implementation, not the bus, so we observe it as soon as
+        // the coordinator exists. The other listeners are wired up via
+        // ``subscribeToBusNotifications`` once configuration arrives.
+        if let appearanceName = configuration.services.syntaxHighlighter.appearanceDidChangeNotification {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleAppearanceChange(_:)),
+                name: appearanceName,
+                object: nil
+            )
+        }
+    }
+
+    /// Subscribe to whichever bus notification names the current configuration
+    /// supplies. Removes any previous subscriptions first so that swapping
+    /// configurations at runtime doesn't double-fire handlers.
+    private func subscribeToBusNotifications(replacing previous: MarkdownEditorBus) {
+        busObservers.forEach(NotificationCenter.default.removeObserver(_:))
+        busObservers.removeAll(keepingCapacity: true)
+
+        let bus = configuration.services.bus
+        let center = NotificationCenter.default
+
+        if let name = bus.applyBoldRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleBoldNotification(notification)
+            })
+        }
+        if let name = bus.applyItalicRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleItalicNotification(notification)
+            })
+        }
+        if let name = bus.applyHeadingRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleHeadingNotification(notification)
+            })
+        }
+        if let name = bus.findScrollToRange {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleFindScrollToRange(notification)
+            })
+        }
+        if let name = bus.findClearHighlights {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleFindClearHighlights(notification)
+            })
+        }
+    }
+
+    // Find-in-document highlight handlers live in
+    // `NativeTextViewCoordinator+Find.swift`.
+
+    func nodeLinkID(for range: NSRange) -> String? {
+        nodeLinkMetadata[WikiLinkService.RangeKey(range)]?.id
+    }
+
+    func storageRange(forDisplayRange range: NSRange) -> NSRange? {
+        nodeLinkMetadata[WikiLinkService.RangeKey(range)]?.storageRange
+    }
+
+    func storageRange(containingDisplayLocation location: Int) -> NSRange? {
+        for (key, value) in nodeLinkMetadata {
+            let displayRange = NSRange(location: key.location, length: key.length)
+            if NSLocationInRange(location, displayRange) {
+                return value.storageRange
+            }
+        }
+        return nil
+    }
+
+    // Methods are split across the following extensions:
+    //   - +TextDelegate    — NSTextViewDelegate hot path
+    //   - +Restyling       — restyle pipeline + parsedDocument cache
+    //   - +InlineSelection — inline-token detection + image-embed activation
+    //   - +CodeBlocks      — copy-button overlay
+    //   - +Find            — find-in-document highlights
+    //   - +Notifications   — bus + appearance bridge
+    //   - +Autocorrect     — spell/grammar/quote toggles
+    //   - +WritingTools    — macOS 15+ Writing Tools session
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        busObservers.forEach(NotificationCenter.default.removeObserver(_:))
+    }
+}
+
+extension NSTextView {
+    func viewRect(forCharacterRange range: NSRange, using bridge: LayoutBridge?) -> CGRect? {
+        guard range.location != NSNotFound,
+              let bridge = bridge,
+              let textContainer = textContainer else { return nil }
+        var boundingRect = bridge.boundingRect(forCharacterRange: range, in: textContainer)
+        let containerOrigin = textContainerOrigin
+        boundingRect.origin.x += containerOrigin.x
+        boundingRect.origin.y += containerOrigin.y
+        if let scrollView = enclosingScrollView {
+            let contentOffset = scrollView.contentView.bounds.origin
+            boundingRect.origin.x -= contentOffset.x
+            boundingRect.origin.y -= contentOffset.y
+        }
+        return boundingRect
+    }
+}
+

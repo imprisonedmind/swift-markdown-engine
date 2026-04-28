@@ -7,127 +7,12 @@
 
 // Handles image paste, task-checkbox clicks, spelling overrides,
 // caret-indicator fixes, bottom overscroll for comfortable typing, and a
-// drag-select autoscroll boost so downward selection
+// drag-select autoscroll boost so downward selection.
+//
+// Bottom-overscroll math lives in `BottomOverscrollPolicy.swift`.
+// Pasteboard image inspection lives in `PasteboardImageReader.swift`.
 import AppKit
 import UniformTypeIdentifiers
-
-private struct BottomOverscrollPolicy {
-    let overscrollPercent: CGFloat
-    let minOverscrollPoints: CGFloat
-    let maxOverscrollPoints: CGFloat
-    let activationStartFraction: CGFloat
-    let activationRangeFraction: CGFloat
-
-    init(configuration: OverscrollPolicy) {
-        self.overscrollPercent = configuration.percent
-        self.minOverscrollPoints = configuration.minPoints
-        self.maxOverscrollPoints = configuration.maxPoints
-        self.activationStartFraction = configuration.activationStartFraction
-        self.activationRangeFraction = configuration.activationRangeFraction
-    }
-
-    init(
-        overscrollPercent: CGFloat,
-        minOverscrollPoints: CGFloat,
-        maxOverscrollPoints: CGFloat,
-        activationStartFraction: CGFloat = OverscrollPolicy.default.activationStartFraction,
-        activationRangeFraction: CGFloat = OverscrollPolicy.default.activationRangeFraction
-    ) {
-        self.overscrollPercent = overscrollPercent
-        self.minOverscrollPoints = minOverscrollPoints
-        self.maxOverscrollPoints = maxOverscrollPoints
-        self.activationStartFraction = activationStartFraction
-        self.activationRangeFraction = activationRangeFraction
-    }
-
-    func activeOverscroll(baseContentHeight: CGFloat, visibleHeight: CGFloat, lineHeight: CGFloat) -> CGFloat {
-        let activationStartHeight = visibleHeight * activationStartFraction
-        let activationRange = max(visibleHeight * activationRangeFraction, 1)
-        let activationProgress = min(
-            max((baseContentHeight - activationStartHeight) / activationRange, 0),
-            1
-        )
-        guard activationProgress > 0 else { return 0 }
-
-        var desiredSlack = visibleHeight * overscrollPercent
-        desiredSlack = min(desiredSlack, maxOverscrollPoints)
-        desiredSlack = max(desiredSlack, minOverscrollPoints)
-        desiredSlack = max(0, floor(desiredSlack - lineHeight))
-
-        // Start unlocking downward scroll before the text fully fills the viewport,
-        // then blend into the final comfortable bottom slack.
-        let scrollUnlockDistance = max(visibleHeight - baseContentHeight, 0)
-        return floor((scrollUnlockDistance + desiredSlack) * activationProgress)
-    }
-}
-
-public enum PasteboardImageReader {
-    public static func canPasteImage(from pasteboard: NSPasteboard) -> Bool {
-        imageFileURL(from: pasteboard) != nil || imageData(from: pasteboard) != nil
-    }
-
-    public static func imageFileURL(from pasteboard: NSPasteboard) -> URL? {
-        let options: [NSPasteboard.ReadingOptionKey: Any] = [
-            .urlReadingFileURLsOnly: true
-        ]
-        guard let objects = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] else {
-            return nil
-        }
-
-        return objects.first(where: { url in
-            guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
-            return type.conforms(to: .image)
-        })
-    }
-
-    public static func imageData(from pasteboard: NSPasteboard) -> Data? {
-        if let pngData = pasteboard.data(forType: .png), !pngData.isEmpty {
-            return pngData
-        }
-
-        if let tiffData = pasteboard.data(forType: .tiff),
-           let bitmapRep = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
-            return pngData
-        }
-
-        if let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-           let image = images.first,
-           let pngData = pngData(from: image) {
-            return pngData
-        }
-
-        for type in pasteboard.types ?? [] where type != .png && type != .tiff {
-            guard let data = pasteboard.data(forType: type),
-                  !data.isEmpty,
-                  let image = NSImage(data: data),
-                  let pngData = pngData(from: image) else {
-                continue
-            }
-            return pngData
-        }
-
-        guard let image = NSImage(pasteboard: pasteboard) else {
-            return nil
-        }
-        return pngData(from: image)
-    }
-
-    private static func pngData(from image: NSImage) -> Data? {
-        if let tiffData = image.tiffRepresentation,
-           let bitmapRep = NSBitmapImageRep(data: tiffData),
-           let pngData = bitmapRep.representation(using: .png, properties: [:]) {
-            return pngData
-        }
-
-        var proposedRect = NSRect(origin: .zero, size: image.size)
-        guard let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
-            return nil
-        }
-        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
-        return bitmapRep.representation(using: .png, properties: [:])
-    }
-}
 
 final class NativeTextView: NSTextView {
     private var baseContentHeight: CGFloat = 0
@@ -313,7 +198,7 @@ final class NativeTextView: NSTextView {
         }
         return true
     }
-    
+
     override func setSpellingState(_ value: Int, range charRange: NSRange) {
         let coordinator = delegate as? NativeTextViewCoordinator
         if value != 0 {
@@ -560,12 +445,14 @@ final class NativeTextView: NSTextView {
         let normalizedHeight = max(ceil(proposedHeight), 0)
         guard baseContentHeight > 0 else { return normalizedHeight }
         guard normalizedHeight < baseContentHeight - 0.5 else {
-            // Settled — clear the persistent shrink flag if it was active.
-            if forceShrinkUntilSettled { forceShrinkUntilSettled = false }
+            // Grow / equal: keep the settle-shrink flag set so we still catch
             return normalizedHeight
         }
-        // forceShrinkUntilSettled overrides everything (file-switch scenario).
-        if forceShrinkUntilSettled { return normalizedHeight }
+        // forceShrinkUntilSettled overrides everything (file-switch / app-start).
+        if forceShrinkUntilSettled {
+            forceShrinkUntilSettled = false
+            return normalizedHeight
+        }
         if let coord = delegate as? NativeTextViewCoordinator, coord.suppressFrameShrink {
             return baseContentHeight
         }

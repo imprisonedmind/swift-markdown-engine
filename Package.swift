@@ -14,6 +14,10 @@ let package = Package(
         .library(name: "MarkdownEngine", targets: ["MarkdownEngine"])
     ],
     targets: [
-        .target(name: "MarkdownEngine")
+        .target(name: "MarkdownEngine"),
+        .testTarget(
+            name: "MarkdownEngineTests",
+            dependencies: ["MarkdownEngine"]
+        )
     ]
 )

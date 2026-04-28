@@ -7,58 +7,11 @@
 
 // Brings the editor into SwiftUI and wires up the text view with the
 // right setup, styling, and callbacks.
+//
+// Public selection / replacement value types live in
+// `NativeTextViewSelectionTypes.swift`.
 import SwiftUI
 import AppKit
-
-public struct NodeLinkSelection: Sendable {
-    public let displayRange: NSRange
-    public let storageRange: NSRange?
-    public let placeholder: String
-
-    public init(displayRange: NSRange, storageRange: NSRange?, placeholder: String) {
-        self.displayRange = displayRange
-        self.storageRange = storageRange
-        self.placeholder = placeholder
-    }
-}
-
-public enum InlineSelectionKind: Sendable {
-    case nodeLink
-    case imageEmbed
-}
-
-public struct InlineSelectionState: Sendable {
-    public let kind: InlineSelectionKind
-    public let selection: NodeLinkSelection
-
-    public init(kind: InlineSelectionKind, selection: NodeLinkSelection) {
-        self.kind = kind
-        self.selection = selection
-    }
-}
-
-public struct InlineReplacementRequest: Sendable {
-    public let id: UUID
-    public let nodeId: String
-    public let selection: NodeLinkSelection
-    public let storageFragment: String
-    public let isImageEmbedMode: Bool
-
-    public init(
-        id: UUID = UUID(),
-        nodeId: String,
-        selection: NodeLinkSelection,
-        storageFragment: String,
-        isImageEmbedMode: Bool
-    ) {
-        self.id = id
-        self.nodeId = nodeId
-        self.selection = selection
-        self.storageFragment = storageFragment
-        self.isImageEmbedMode = isImageEmbedMode
-    }
-}
-
 
 public struct NativeTextViewWrapper: NSViewRepresentable {
     public typealias Coordinator = NativeTextViewCoordinator
@@ -168,12 +121,14 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             textView.writingToolsBehavior = .complete
         }
         // Create TextKit 2 layout bridge
-        let bridge = LayoutBridge(textLayoutManager)    
+        let bridge = LayoutBridge(textLayoutManager)
         context.coordinator.layoutBridge = bridge
         textView.layoutBridge = bridge
 
         scrollView.documentView = textView
-
+        // App-start settle: TextKit 2's `usageBoundsForTextContainer` reports
+        // overshoot heights during incremental layout
+        textView.forceShrinkUntilSettled = true
         // Force full-document layout at init so paragraph heights are known
         // upfront; otherwise TextKit 2 viewport layout causes scroll drift.
         textLayoutManager.ensureLayout(for: textLayoutManager.documentRange)
