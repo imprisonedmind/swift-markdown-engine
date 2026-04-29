@@ -109,90 +109,46 @@ final class NativeTextView: NSTextView {
     }
 
     private func remapClickInParagraphSpacing(event: NSEvent) -> Bool {
-        guard event.clickCount == 1, !event.modifierFlags.contains(.shift) else {
-            return false
-        }
-        guard let tlm = textLayoutManager, let tcs = textContentStorage else {
+        guard event.clickCount == 1, !event.modifierFlags.contains(.shift),
+              let tlm = textLayoutManager, let tcs = textContentStorage else {
             return false
         }
         let viewPoint = convert(event.locationInWindow, from: nil)
-        let containerPoint = CGPoint(
+        let click = CGPoint(
             x: viewPoint.x - textContainerOrigin.x,
             y: viewPoint.y - textContainerOrigin.y
         )
-        guard let fragment = tlm.textLayoutFragment(for: containerPoint),
+        guard let fragment = tlm.textLayoutFragment(for: click),
               let lastLine = fragment.textLineFragments.last else {
             return false
         }
         let fragFrame = fragment.layoutFragmentFrame
         let lastLineMaxY = fragFrame.minY + lastLine.typographicBounds.maxY
-        guard containerPoint.y > lastLineMaxY,
-              containerPoint.y <= fragFrame.maxY else {
-            return false
-        }
-        let nextFragment = nextLayoutFragment(after: fragment, in: tlm)
-        let nextLineTopAbsY: CGFloat = {
-            if let next = nextFragment, let first = next.textLineFragments.first {
-                return next.layoutFragmentFrame.minY + first.typographicBounds.minY
-            }
-            return fragFrame.maxY
-        }()
-        let distUp = containerPoint.y - lastLineMaxY
-        let distDown = nextLineTopAbsY - containerPoint.y
-        let useLower = distDown < distUp
-            && (nextFragment?.textLineFragments.first != nil)
-        let chosenFragment = useLower ? nextFragment! : fragment
-        let chosenLine = useLower ? nextFragment!.textLineFragments.first! : lastLine
-        guard let docOffset = documentOffset(
-            forClickX: containerPoint.x,
-            in: chosenFragment,
-            line: chosenLine,
-            using: tcs
-        ) else { return false }
-        let docLength = (string as NSString).length
-        let clamped = min(max(docOffset, 0), docLength)
-        window?.makeFirstResponder(self)
-        setSelectedRange(NSRange(location: clamped, length: 0))
-        return true
-    }
+        guard click.y > lastLineMaxY, click.y <= fragFrame.maxY else { return false }
 
-    private func documentOffset(
-        forClickX clickX: CGFloat,
-        in fragment: NSTextLayoutFragment,
-        line: NSTextLineFragment,
-        using tcs: NSTextContentStorage
-    ) -> Int? {
-        let fragFrame = fragment.layoutFragmentFrame
-        let lineTypo = line.typographicBounds
-        let lineLocalPoint = CGPoint(
-            x: clickX - fragFrame.minX - lineTypo.minX,
+        var nextFragment: NSTextLayoutFragment?
+        tlm.enumerateTextLayoutFragments(
+            from: fragment.rangeInElement.endLocation, options: [.ensuresLayout]
+        ) { nextFragment = $0; return false }
+        let nextFirst = nextFragment?.textLineFragments.first
+        let nextTopY = nextFirst.map { nextFragment!.layoutFragmentFrame.minY + $0.typographicBounds.minY } ?? fragFrame.maxY
+        let useLower = (nextTopY - click.y) < (click.y - lastLineMaxY) && nextFirst != nil
+        let chosenFragment = useLower ? nextFragment! : fragment
+        let chosenLine = useLower ? nextFirst! : lastLine
+        let lineTypo = chosenLine.typographicBounds
+        let lineLocal = CGPoint(
+            x: click.x - chosenFragment.layoutFragmentFrame.minX - lineTypo.minX,
             y: lineTypo.midY - lineTypo.minY
         )
-        let charIndexInFragment = line.characterIndex(for: lineLocalPoint)
-        let lineStart = line.characterRange.location
-        let lineEnd = lineStart + line.characterRange.length
-        let clampedInFragment = max(lineStart, min(lineEnd, charIndexInFragment))
-        let fragStart = tcs.offset(
-            from: tcs.documentRange.location,
-            to: fragment.rangeInElement.location
-        )
-        guard fragStart != NSNotFound else { return nil }
-        return fragStart + clampedInFragment
-    }
-
-    private func nextLayoutFragment(
-        after fragment: NSTextLayoutFragment,
-        in tlm: NSTextLayoutManager
-    ) -> NSTextLayoutFragment? {
-        var next: NSTextLayoutFragment?
-        tlm.enumerateTextLayoutFragments(
-            from: fragment.rangeInElement.endLocation,
-            options: [.ensuresLayout]
-        ) { f in
-            next = f
-            return false
-        }
-        return next
+        let charIdx = chosenLine.characterIndex(for: lineLocal)
+        let lineStart = chosenLine.characterRange.location
+        let clampedInFrag = max(lineStart, min(lineStart + chosenLine.characterRange.length, charIdx))
+        let fragStart = tcs.offset(from: tcs.documentRange.location, to: chosenFragment.rangeInElement.location)
+        guard fragStart != NSNotFound else { return false }
+        let docLen = (string as NSString).length
+        window?.makeFirstResponder(self)
+        setSelectedRange(NSRange(location: min(max(fragStart + clampedInFrag, 0), docLen), length: 0))
+        return true
     }
 
     override func scrollRangeToVisible(_ range: NSRange) {
@@ -416,7 +372,11 @@ final class NativeTextView: NSTextView {
                                  width: indicator.frame.width, height: r.height)
         isApplyingCaretShift = false
     }
-
+    /// At the very end of a doc that ends with `\n`, AppKit places the caret
+    /// indicator on the previous line's TOP instead of below it (FB22524198 —
+    /// transient phantom-EOD layout). KVO-observe the indicator and snap its
+    /// origin.y to `lastLineMaxY + paragraphSpacing`, the position TextKit
+    /// would settle on once layout completes.
     private func fixPhantomTrailingCaret() {
         if let indicator = subviews.first(where: { type(of: $0) == NSTextInsertionIndicator.self }),
            observedCaretIndicator !== indicator {
@@ -435,19 +395,20 @@ final class NativeTextView: NSTextView {
         let ns = ts.string as NSString
         guard sel.length == 0, sel.location == ns.length, ns.length > 0,
               ns.character(at: ns.length - 1) == 0x0A,
-              ns.length < 2 || ns.character(at: ns.length - 2) == 0x0A,
-              let docLoc = tcs.location(tcs.documentRange.location, offsetBy: sel.location) else { return }
-
-        var targetY: CGFloat = 0
-        tlm.enumerateTextSegments(in: NSTextRange(location: docLoc), type: .standard) { _, f, _, _ in
-            targetY = f.origin.y; return false
+              let trailingLoc = tcs.location(tcs.documentRange.location, offsetBy: ns.length - 1) else {
+            return
         }
-        // self.font can return a stale small-point font here; read spacing from the paragraph style.
-        let style = (ts.attribute(.paragraphStyle, at: sel.location - 1, effectiveRange: nil)
-                     ?? typingAttributes[.paragraphStyle]) as? NSParagraphStyle
-        let desiredY = targetY + (style?.paragraphSpacing ?? 0)
-        guard abs(indicator.frame.origin.y - desiredY) >= 0.5 else { return }
-
+        // Walk to the fragment containing the trailing `\n` and use its first
+        // line's maxY + paragraphSpacing as the settled phantom-EOD Y.
+        var desiredY: CGFloat?
+        tlm.enumerateTextLayoutFragments(from: trailingLoc, options: [.ensuresLayout]) { fragment in
+            guard let firstLine = fragment.textLineFragments.first else { return false }
+            let lineMaxY = fragment.layoutFragmentFrame.origin.y + firstLine.typographicBounds.maxY
+            let style = ts.attribute(.paragraphStyle, at: ns.length - 1, effectiveRange: nil) as? NSParagraphStyle
+            desiredY = lineMaxY + (style?.paragraphSpacing ?? 0)
+            return false
+        }
+        guard let desiredY, abs(indicator.frame.origin.y - desiredY) >= 0.5 else { return }
         isApplyingCaretShift = true
         indicator.frame.origin.y = desiredY
         isApplyingCaretShift = false
