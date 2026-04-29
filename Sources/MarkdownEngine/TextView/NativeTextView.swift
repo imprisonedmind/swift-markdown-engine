@@ -398,12 +398,14 @@ final class NativeTextView: NSTextView {
               let trailingLoc = tcs.location(tcs.documentRange.location, offsetBy: ns.length - 1) else {
             return
         }
-        // Walk to the fragment containing the trailing `\n` and use its first
-        // line's maxY + paragraphSpacing as the settled phantom-EOD Y.
         var desiredY: CGFloat?
         tlm.enumerateTextLayoutFragments(from: trailingLoc, options: [.ensuresLayout]) { fragment in
-            guard let firstLine = fragment.textLineFragments.first else { return false }
-            let lineMaxY = fragment.layoutFragmentFrame.origin.y + firstLine.typographicBounds.maxY
+            // Use the LAST text line (length > 0) so multi-line wrapped
+            // paragraphs aren't pulled to the first line.
+            let lastTextLine = fragment.textLineFragments.last { $0.characterRange.length > 0 }
+                ?? fragment.textLineFragments.last
+            guard let line = lastTextLine else { return false }
+            let lineMaxY = fragment.layoutFragmentFrame.origin.y + line.typographicBounds.maxY
             let style = ts.attribute(.paragraphStyle, at: ns.length - 1, effectiveRange: nil) as? NSParagraphStyle
             desiredY = lineMaxY + (style?.paragraphSpacing ?? 0)
             return false
