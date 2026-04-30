@@ -83,8 +83,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for lineFragment in textLineFragments {
             let lr = lineFragment.characterRange
             if localIndex >= lr.location && localIndex < lr.location + lr.length {
-                let charInLine = localIndex - lr.location
-                let charPos = lineFragment.locationForCharacter(at: charInLine)
+                let charPos = lineFragment.locationForCharacter(at: localIndex)
                 let tb = lineFragment.typographicBounds
                 return (
                     x: point.x + tb.origin.x + charPos.x,
@@ -254,7 +253,6 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                 guard let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) else { return }
                 drawRect = rect
             } else {
-                // Inline: align to baseline using descent stored in imageBounds.origin.y
                 let descent = imageBounds.origin.y
                 drawRect = CGRect(x: pos.x,
                                   y: pos.baselineY + descent - imageBounds.height,
