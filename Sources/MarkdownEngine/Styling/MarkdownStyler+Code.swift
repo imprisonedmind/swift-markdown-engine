@@ -44,15 +44,21 @@ extension MarkdownStyler {
 
     static func styleInlineCode(_ ctx: StylingContext) -> [StyledRange] {
         var attrs: [StyledRange] = []
-        for token in ctx.tokens where token.kind == .inlineCode {
+        for (idx, token) in ctx.tokens.enumerated() where token.kind == .inlineCode {
+            let isActive = ctx.activeTokenIndices.contains(idx)
             attrs.append((token.contentRange, [
                 .font: ctx.codeFont,
                 .backgroundColor: ctx.codeBackgroundColor
             ]))
-            let inlineMarkerAttributes: [NSAttributedString.Key: Any] = [
-                .foregroundColor: ctx.configuration.theme.mutedText.withAlphaComponent(ctx.configuration.markers.inlineCodeMarkerAlpha),
-                .font: ctx.inlineMarkerFont
-            ]
+            let inlineMarkerAttributes: [NSAttributedString.Key: Any] = isActive
+                ? [
+                    .foregroundColor: ctx.configuration.theme.mutedText,
+                    .font: ctx.codeFont
+                ]
+                : [
+                    .foregroundColor: ctx.configuration.theme.mutedText.withAlphaComponent(ctx.configuration.markers.inlineCodeMarkerAlpha),
+                    .font: ctx.inlineMarkerFont
+                ]
             token.markerRanges.forEach { attrs.append(($0, inlineMarkerAttributes)) }
         }
         return attrs
