@@ -87,7 +87,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                 let tb = lineFragment.typographicBounds
                 return (
                     x: point.x + tb.origin.x + charPos.x,
-                    baselineY: point.y + lineY + charPos.y,
+                    baselineY: point.y + lineY + tb.origin.y + charPos.y,
                     lineHeight: tb.height
                 )
             }
