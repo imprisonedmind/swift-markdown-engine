@@ -85,14 +85,14 @@ public struct MarkdownEditorConfiguration: Sendable {
 
 // MARK: - Scroll bars
 
-/// Visibility and auto-hide behavior for the editor's vertical/horizontal scrollers. Defaults match the Nodes app (both off) so that embedders see the historical behavior unless they opt in.
+/// Visibility and auto-hide behavior for the editor's vertical/horizontal scrollers. Defaults follow the typical text-editor expectation (vertical scroller visible with system auto-hide); use ``hidden`` for embedders that wire their own scroll overlay.
 public struct ScrollersPolicy: Sendable {
     public var hasVerticalScroller: Bool
     public var hasHorizontalScroller: Bool
     public var autohidesScrollers: Bool
 
     public init(
-        hasVerticalScroller: Bool = false,
+        hasVerticalScroller: Bool = true,
         hasHorizontalScroller: Bool = false,
         autohidesScrollers: Bool = true
     ) {
@@ -102,6 +102,14 @@ public struct ScrollersPolicy: Sendable {
     }
 
     public static let `default` = ScrollersPolicy()
+    /// No scrollers at all. Use when the embedder draws its own scroll overlay.
+    public static let hidden = ScrollersPolicy(hasVerticalScroller: false, hasHorizontalScroller: false)
+    /// Vertical scroller only (typical Markdown / prose editor). Same as `default`.
+    public static let vertical = ScrollersPolicy(hasVerticalScroller: true, hasHorizontalScroller: false)
+    /// Both scrollers visible (useful for code-heavy or wide-content editors).
+    public static let both = ScrollersPolicy(hasVerticalScroller: true, hasHorizontalScroller: true)
+    /// Vertical scroller permanently visible (no auto-hide).
+    public static let alwaysVisible = ScrollersPolicy(hasVerticalScroller: true, autohidesScrollers: false)
 }
 
 // MARK: - Marker visibility
