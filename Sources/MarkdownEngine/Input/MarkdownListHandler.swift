@@ -176,6 +176,37 @@ struct MarkdownLists {
         let isInCodeBlock = textView.string.contains("`")
             ? MarkdownDetection.isInsideCodeBlock(location: affectedCharRange.location, in: textView.string)
             : false
+
+        // BACKSPACE on an empty bullet prefix line ("\t+• " with no other
+        // content): undo the auto-conversion that turned a typed `-` + space
+        // into `\t• `. We collapse the whole prefix back to `-` so the user
+        // can keep deleting cleanly instead of stalling on the bullet glyph.
+        if listsEnabled,
+           replacementString.isEmpty,
+           affectedCharRange.length == 1,
+           !isInCodeBlock {
+            let nsText = textView.string as NSString
+            let safeLoc = min(affectedCharRange.location, nsText.length)
+            let lineRange = nsText.lineRange(for: NSRange(location: safeLoc, length: 0))
+            // Strip trailing newline so the regex anchors against true end-of-line.
+            var contentLength = lineRange.length
+            if contentLength > 0,
+               nsText.character(at: lineRange.location + contentLength - 1) == 0x000A {
+                contentLength -= 1
+            }
+            if contentLength > 0 {
+                let lineContentRange = NSRange(location: lineRange.location, length: contentLength)
+                let lineContent = nsText.substring(with: lineContentRange)
+                if lineContent.range(of: #"^\t+• $"#, options: .regularExpression) != nil,
+                   affectedCharRange.location >= lineRange.location,
+                   affectedCharRange.location < lineRange.location + contentLength {
+                    MarkdownLists.performEdit(textView, replace: lineContentRange, with: "-")
+                    textView.setSelectedRange(NSRange(location: lineRange.location + 1, length: 0))
+                    return false
+                }
+            }
+        }
+
         if replacementString == ">" && affectedCharRange.length == 0 && !isInCodeBlock {
             let insertionLocation = affectedCharRange.location
             guard insertionLocation > 0 else { return true }
