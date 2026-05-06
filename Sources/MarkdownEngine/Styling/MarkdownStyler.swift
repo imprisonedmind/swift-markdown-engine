@@ -162,6 +162,7 @@ enum MarkdownStyler {
         result += styleAutoLinks(ctx)
         result += styleWikiLinks(ctx, wikiLinkIDProvider: wikiLinkIDProvider)
         result += styleImageEmbeds(ctx)
+        result += styleImageLinks(ctx)
         result += styleMarkdownLinks(ctx)
         result += styleCodeBlocks(ctx)
         result += styleInlineCode(ctx)

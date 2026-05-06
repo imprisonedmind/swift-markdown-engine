@@ -27,6 +27,7 @@ enum MarkdownTokenKind {
     case blockLatex
     case inlineLatex
     case imageEmbed
+    case imageLink
     case strikethrough
 }
 

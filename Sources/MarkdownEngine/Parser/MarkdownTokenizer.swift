@@ -26,6 +26,9 @@ private extension MarkdownTokenizer {
     static let imageEmbedRegex = try! NSRegularExpression(
         pattern: "!\\[\\[([^\\]\\r\\n]*)\\]\\]"
     )
+    static let imageLinkRegex = try! NSRegularExpression(
+        pattern: "!\\[([^\\]\\r\\n]*)\\]\\(([^\\)\\r\\n]+)\\)"
+    )
     static let wikiLinkRegex = try! NSRegularExpression(
         pattern: "\\[\\[([^\\|\\]\\r\\n]*)\\|?([^\\]\\r\\n]*)\\]\\]"
     )
@@ -143,9 +146,34 @@ enum MarkdownTokenizer {
                                         markerRanges: [open, close]))
         }
 
+        // Image links ![alt](URL) — standard Markdown image syntax. Must be
+        // parsed before markdownLinkRegex; otherwise the trailing
+        // `[alt](URL)` sub-string would be claimed as a plain link, leaving
+        // the leading `!` orphaned and the embedder no chance to render an
+        // image.
+        var imageLinkRanges: [NSRange] = []
+        for match in imageLinkRegex.matches(in: text, options: [], range: fullRange) {
+            let full = match.range(at: 0)
+            let altRange = match.range(at: 1)
+            let urlRange = match.range(at: 2)
+            let bangBracket = NSRange(location: full.location, length: 2) // ![
+            let closeBracket = NSRange(location: altRange.location + altRange.length, length: 1) // ]
+            let openParen = NSRange(location: urlRange.location - 1, length: 1) // (
+            let closeParen = NSRange(location: urlRange.location + urlRange.length, length: 1) // )
+            tokens.append(MarkdownToken(kind: .imageLink,
+                                        range: full,
+                                        contentRange: altRange,
+                                        markerRanges: [bangBracket, closeBracket, openParen, closeParen]))
+            imageLinkRanges.append(full)
+        }
+
         // Markdown links [Text](URL)
         for match in markdownLinkRegex.matches(in: text, options: [], range: fullRange) {
             let full = match.range
+            // Skip ranges that overlap with imageLink — the bang prefix is
+            // recognized one token earlier and we don't want to double-style
+            // the bracket region.
+            if imageLinkRanges.contains(where: { NSIntersectionRange($0, full).length > 0 }) { continue }
             let textRange = match.range(at: 1)
             let urlRange = match.range(at: 2)
             let openBracket = NSRange(location: full.location, length: 1)
