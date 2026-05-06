@@ -44,16 +44,30 @@ extension MarkdownStyler {
 
     static func styleInlineCode(_ ctx: StylingContext) -> [StyledRange] {
         var attrs: [StyledRange] = []
-        for token in ctx.tokens where token.kind == .inlineCode {
+        for (idx, token) in ctx.tokens.enumerated() where token.kind == .inlineCode {
             attrs.append((token.contentRange, [
                 .font: ctx.codeFont,
                 .backgroundColor: ctx.codeBackgroundColor
             ]))
-            let inlineMarkerAttributes: [NSAttributedString.Key: Any] = [
-                .foregroundColor: ctx.configuration.theme.mutedText.withAlphaComponent(ctx.configuration.markers.inlineCodeMarkerAlpha),
-                .font: ctx.inlineMarkerFont
-            ]
-            token.markerRanges.forEach { attrs.append(($0, inlineMarkerAttributes)) }
+            // When the caret is inside the inline code, surface the backticks
+            // at full size so the user can see what they're editing. When
+            // it isn't, fall back to the dimmed near-zero-size form that
+            // hides the syntax noise.
+            let isActive = ctx.activeTokenIndices.contains(idx)
+            let markerAttributes: [NSAttributedString.Key: Any]
+            if isActive {
+                markerAttributes = [
+                    .foregroundColor: ctx.configuration.theme.mutedText,
+                    .font: ctx.codeFont
+                ]
+            } else {
+                markerAttributes = [
+                    .foregroundColor: ctx.configuration.theme.mutedText
+                        .withAlphaComponent(ctx.configuration.markers.inlineCodeMarkerAlpha),
+                    .font: ctx.inlineMarkerFont
+                ]
+            }
+            token.markerRanges.forEach { attrs.append(($0, markerAttributes)) }
         }
         return attrs
     }
