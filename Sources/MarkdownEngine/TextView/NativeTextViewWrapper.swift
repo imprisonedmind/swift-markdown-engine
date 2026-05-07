@@ -100,15 +100,16 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     public func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ClampedScrollView()
         scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = configuration.scrollers.hasVerticalScroller
+        scrollView.hasHorizontalScroller = configuration.scrollers.hasHorizontalScroller
+        scrollView.autohidesScrollers = configuration.scrollers.autohidesScrollers
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(
-            top: configuration.contentInsets.top,
-            left: configuration.contentInsets.leading,
-            bottom: configuration.contentInsets.bottom,
-            right: configuration.contentInsets.trailing
+            top: configuration.safeAreaInsets.top,
+            left: configuration.safeAreaInsets.leading,
+            bottom: configuration.safeAreaInsets.bottom,
+            right: configuration.safeAreaInsets.trailing
         )
 
         // Let NSTextView auto-initialize its own TextKit 2 stack via init(frame:).
@@ -121,6 +122,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         textContainer.lineFragmentPadding = 0
         textContainer.widthTracksTextView = true
+        textView.textContainerInset = NSSize(
+            width: configuration.textInsets.horizontal,
+            height: configuration.textInsets.vertical
+        )
         textContainer.heightTracksTextView = false
 
         let layoutDelegate = MarkdownLayoutManagerDelegate()
@@ -163,9 +168,6 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.layoutBridge = bridge
 
         scrollView.documentView = textView
-        // App-start settle: TextKit 2's `usageBoundsForTextContainer` reports
-        // overshoot heights during incremental layout
-        textView.forceShrinkUntilSettled = true
         // Force full-document layout at init so paragraph heights are known
         // upfront; otherwise TextKit 2 viewport layout causes scroll drift.
         textLayoutManager.ensureLayout(for: textLayoutManager.documentRange)
@@ -226,6 +228,22 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         if let bottomTextView = nsView.documentView as? NativeTextView {
             bottomTextView.onPasteImage = onPasteImage
         }
+        if nsView.hasVerticalScroller != configuration.scrollers.hasVerticalScroller {
+            nsView.hasVerticalScroller = configuration.scrollers.hasVerticalScroller
+        }
+        if nsView.hasHorizontalScroller != configuration.scrollers.hasHorizontalScroller {
+            nsView.hasHorizontalScroller = configuration.scrollers.hasHorizontalScroller
+        }
+        if nsView.autohidesScrollers != configuration.scrollers.autohidesScrollers {
+            nsView.autohidesScrollers = configuration.scrollers.autohidesScrollers
+        }
+        let desiredTextInset = NSSize(
+            width: configuration.textInsets.horizontal,
+            height: configuration.textInsets.vertical
+        )
+        if textView.textContainerInset != desiredTextInset {
+            textView.textContainerInset = desiredTextInset
+        }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the
@@ -258,18 +276,12 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         if fontChanged {
             context.coordinator.didInitialFormatting = false
-            (textView as? NativeTextView)?.allowFrameShrink = true
         }
         if isNodeSwitch {
             context.coordinator.documentId = documentId
             textView.undoManager?.removeAllActions()
             context.coordinator.didInitialFormatting = false
             context.coordinator.resetImageEmbedState()
-            // Persistent shrink: survives frame ping-pong from NSTextView's
-            // viewport-based intermediate setFrameSize calls. Cleared in
-            // resolvedBaseContentHeight once the frame has settled.
-            (textView as? NativeTextView)?.forceShrinkUntilSettled = true
-            (textView as? NativeTextView)?.allowFrameShrink = true
             // Reset scroll to top of content so the previous file's scrollY
             // doesn't leak into a (potentially shorter) new file.
             nsView.contentView.scroll(to: NSPoint(x: 0, y: -nsView.contentInsets.top))
@@ -285,82 +297,18 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             (nsView as? ClampedScrollView)?.clampToInsets()
         }
 
-        let displayState = WikiLinkService.makeDisplayState(from: text)
-        let displayText = displayState.display
-        context.coordinator.wikiLinkMetadata = displayState.metadata
-        // Suppress frame shrink during text replacement when images are present (but NOT on node switch).
-        if !isNodeSwitch {
-            context.coordinator.suppressFrameShrink = true
-        }
-        if textView.string != displayText {
-            textView.string = displayText
-        }
-        context.coordinator.lastSyncedText = text
-        let nsDisplay = displayText as NSString
-        let fullRange = NSRange(location: 0, length: nsDisplay.length)
-
-        let activeConfiguration = context.coordinator.configuration
-        let (baseFont, paragraph) = TextStylingService.makeBaseFontAndStyle(
-            fontName: fontName,
-            fontSize: fontSize,
-            layoutBridge: context.coordinator.layoutBridge,
-            configuration: activeConfiguration
+        // Sync coordinator's font fields BEFORE the rebuild so the helper
+        // reads the current values from the View struct.
+        context.coordinator.fontName = fontName
+        context.coordinator.fontSize = fontSize
+        context.coordinator.rebuildTextStorageAndStyle(
+            textView,
+            from: text,
+            invalidateLayout: isNodeSwitch
         )
-
-        let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .foregroundColor: activeConfiguration.theme.bodyText,
-            .paragraphStyle: paragraph
-        ]
-        textView.textStorage?.beginEditing()
-        textView.textStorage?.removeAttribute(.link, range: fullRange)
-        textView.textStorage?.setAttributes(baseAttrs, range: fullRange)
-
-        let currentCaretLocation = textView.selectedRange().location
-        // Reuse the coordinator's tokenize cache.
-        let tokens = context.coordinator.parsedDocument(for: displayText).tokens
-        let updatedActiveTokenIndices = MarkdownDetection.computeActiveTokenIndices(
-            selectionRange: textView.selectedRange(), tokens: tokens, in: nsDisplay
-        )
-        context.coordinator.activeTokenIndices = updatedActiveTokenIndices
-
-        let ranges = MarkdownStyler.styleAttributes(
-            text: displayText,
-            fontName: fontName,
-            fontSize: fontSize,
-            layoutBridge: context.coordinator.layoutBridge,
-            caretLocation: currentCaretLocation,
-            activeTokenIndices: updatedActiveTokenIndices,
-            precomputedTokens: tokens,
-            configuration: activeConfiguration
-        )
-        for (range, attrs) in ranges {
-            for (key, value) in attrs {
-                textView.textStorage?.addAttribute(key, value: value, range: range)
-            }
-        }
-        textView.textStorage?.endEditing()
-        // Reset typingAttributes to body before the layout pass so the phantom end-of-document line doesn't inherit the previous file's heading metrics.
-        textView.typingAttributes = TextStylingService.makeBaseTypingAttributes(
-            font: baseFont,
-            paragraphStyle: paragraph,
-            theme: activeConfiguration.theme
-        )
-        // Force full layout so paragraph heights stay stable after attribute changes.
-        if let tlm = textView.textLayoutManager {
-            if isNodeSwitch {
-                tlm.invalidateLayout(for: tlm.documentRange)
-            }
-            tlm.ensureLayout(for: tlm.documentRange)
-        }
         if let tv = nsView.documentView as? NativeTextView {
             tv.recalcOverscroll(for: nsView)
             (nsView as? ClampedScrollView)?.clampToInsets()
-        }
-        if !isNodeSwitch {
-            DispatchQueue.main.async {
-                context.coordinator.suppressFrameShrink = false
-            }
         }
         DispatchQueue.main.async {
             if let tv = nsView.documentView as? NativeTextView {
@@ -368,14 +316,6 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             }
         }
 
-        textView.typingAttributes = TextStylingService.makeBaseTypingAttributes(
-            font: baseFont,
-            paragraphStyle: paragraph,
-            theme: activeConfiguration.theme
-        )
-
-        context.coordinator.fontName = fontName
-        context.coordinator.fontSize = fontSize
         context.coordinator.onCaretRectChange = onCaretRectChange
         context.coordinator.onInlineSelectionChange = onInlineSelectionChange
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
