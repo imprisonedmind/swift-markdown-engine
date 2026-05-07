@@ -86,19 +86,24 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         guard localIndex >= 0 else { return nil }
 
         var lineY: CGFloat = 0
-        for lineFragment in textLineFragments {
+        for (i, lineFragment) in textLineFragments.enumerated() {
             let lr = lineFragment.characterRange
-            if localIndex >= lr.location && localIndex < lr.location + lr.length {
+            let inRange = localIndex >= lr.location && localIndex < lr.location + lr.length
+            print("[LATEX-POS]   probe docIndex=\(docIndex) localIndex=\(localIndex) line[\(i)] charRange=\(lr) lineY=\(lineY) match=\(inRange)")
+            if inRange {
                 let charPos = lineFragment.locationForCharacter(at: localIndex)
                 let tb = lineFragment.typographicBounds
-                return (
+                let result = (
                     x: point.x + tb.origin.x + charPos.x,
                     baselineY: point.y + lineY + tb.origin.y + charPos.y,
                     lineHeight: tb.height
                 )
+                print("[LATEX-POS]     ✅ found: charPos=\(charPos) tb=\(tb) → x=\(result.x) baselineY=\(result.baselineY)")
+                return result
             }
             lineY += lineFragment.typographicBounds.height
         }
+        print("[LATEX-POS]   ❌ no line fragment matched docIndex=\(docIndex) localIndex=\(localIndex) fragRange=\(fragRange)")
         return nil
     }
 
@@ -286,6 +291,13 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
         NSGraphicsContext.current = nsContext
 
+        // [LATEX-DRAW] Per-fragment summary so we can see how multi-LaTeX lines wrap.
+        let lineCount = textLineFragments.count
+        print("[LATEX-DRAW] === fragment range=\(range) point=\(point) lineFragments=\(lineCount) layoutFragmentFrame=\(layoutFragmentFrame) ===")
+        for (i, lf) in textLineFragments.enumerated() {
+            print("[LATEX-DRAW]   line[\(i)] charRange=\(lf.characterRange) typoBounds=\(lf.typographicBounds) glyphOrigin=\(lf.glyphOrigin)")
+        }
+
         ts.enumerateAttribute(.latexImage, in: range, options: []) { [weak self] value, attrRange, _ in
             guard let self, let image = value as? NSImage else { return }
 
@@ -294,11 +306,19 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let isBlock = ts.attribute(.latexIsBlock, at: attrRange.location, effectiveRange: nil) as? Bool ?? false
             let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
 
-            guard let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
+            print("[LATEX-DRAW] image attrRange=\(attrRange) isBlock=\(isBlock) imageSize=\(image.size) imageBounds=\(imageBounds)")
+
+            guard let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else {
+                print("[LATEX-DRAW]   ❌ drawPosition returned nil for docIndex=\(attrRange.location)")
+                return
+            }
 
             let drawRect: CGRect
             if isBlock {
-                guard let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) else { return }
+                guard let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) else {
+                    print("[LATEX-DRAW]   ❌ blockImageDrawRect returned nil")
+                    return
+                }
                 drawRect = rect
             } else {
                 let descent = imageBounds.origin.y
@@ -306,6 +326,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                                   y: pos.baselineY + descent - imageBounds.height,
                                   width: imageBounds.width, height: imageBounds.height)
             }
+            print("[LATEX-DRAW]   pos=(x:\(pos.x), baselineY:\(pos.baselineY), lineH:\(pos.lineHeight)) drawRect=\(drawRect)")
             image.draw(in: drawRect)
         }
     }
