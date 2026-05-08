@@ -12,7 +12,7 @@
        width="100%">
 </video>
 
-> Originally extracted from and used in production by **[Nodes](https://nodes-web.com/#/)** — a native macOS knowledge tool
+> Originally extracted from and used in production by **[Nodes](https://nodes-web.com/#/)** — a minimal, beautiful, and fast writing app for macOS
 
 
 A native AppKit Markdown editor for macOS, built on TextKit 2 and bridged to
