@@ -169,6 +169,7 @@ enum MarkdownStyler {
         result += styleBlockLatex(ctx)
         result += styleInlineLatex(ctx)
         result += styleHorizontalRules(ctx)
+        result += styleTables(ctx)
         result += styleIncompleteLinkBrackets(ctx)
         result += styleTaskCheckboxes(ctx)
         result += shrinkInactiveMarkers(ctx)

@@ -59,6 +59,10 @@ private extension MarkdownTokenizer {
         pattern: "(?<!\\$)\\$(?!\\$)([^$\\n]+?)\\$(?!\\$)",
         options: []
     )
+    static let tableRegex = try! NSRegularExpression(
+        pattern: #"^[ \t]*\|.+\|[ \t]*\r?\n[ \t]*\|[- \t:|]+\|[ \t]*(?:\r?\n[ \t]*\|.+\|[ \t]*)*"#,
+        options: [.anchorsMatchLines]
+    )
 }
 
 // MARK: - Tokenizer
@@ -225,6 +229,20 @@ enum MarkdownTokenizer {
                                         markerRanges: [openingMarker, closingMarker]))
         }
         
+        // GFM tables. Parsed after code blocks so we can skip table-shaped
+        // lines inside fenced code; sits before block-latex/inline-latex
+        // because we don't want `$$...$$` rules trying to claim ranges that
+        // belong to a table cell.
+        for match in tableRegex.matches(in: text, options: [], range: fullRange) {
+            let full = match.range(at: 0)
+            let inCode = tokens.contains { $0.kind == .codeBlock && NSIntersectionRange($0.range, full).length > 0 }
+            if inCode { continue }
+            tokens.append(MarkdownToken(kind: .table,
+                                        range: full,
+                                        contentRange: full,
+                                        markerRanges: []))
+        }
+
         // Block LaTeX $$...$$ (multiline)
         for match in blockLatexRegex.matches(in: text, options: [], range: fullRange) {
             let full = match.range(at: 0)

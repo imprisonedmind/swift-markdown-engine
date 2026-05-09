@@ -29,6 +29,7 @@ enum MarkdownTokenKind {
     case imageEmbed
     case imageLink
     case strikethrough
+    case table
 }
 
 struct MarkdownToken {
