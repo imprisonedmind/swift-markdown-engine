@@ -89,10 +89,44 @@ highlighting, themes, wiki-link state, and more.
 
 ## Customization
 
+### Service Protocols
+
+The engine talks to your app through four service protocols, each with
+a no-op default so you only implement what you actually need:
+
+| Protocol | What you supply | Default / ready-made |
+|---|---|---|
+| `WikiLinkResolver` | Resolve a `[[Name]]` to a stable opaque id | `NoOpWikiLinkResolver` (default) |
+| `EmbeddedImageProvider` | Look up an `NSImage` for `![[Name]]` | `NoOpEmbeddedImageProvider` (default) |
+| `SyntaxHighlighter` | Highlight code blocks for a given language | `PlainTextSyntaxHighlighter` (default); **`HighlighterSwiftBridge`** ([recommended](#syntax-highlighting)) |
+| `LatexRenderer` | Render a LaTeX string to an `NSImage` | `NoOpLatexRenderer` (default); roll your own with [SwiftMath](https://github.com/mgriebling/SwiftMath) |
+
+Implement what you need and pass it through `MarkdownEditorServices`:
+
+```swift
+struct MyResolver: WikiLinkResolver {
+    func resolve(displayName: String, range: NSRange) -> WikiLinkResolution? {
+        myIndex[displayName].map { WikiLinkResolution(id: $0, exists: true) }
+    }
+}
+
+configuration.services = MarkdownEditorServices(
+    wikiLinks: MyResolver()
+    // images, syntaxHighlighter, latex omitted → no-op defaults
+)
+```
+
+Each protocol and its no-op default are documented in DocC.
+
 ### Syntax Highlighting
 
-The `MarkdownEngineHighlighter` product ships `HighlighterSwiftBridge`,
-a turnkey `SyntaxHighlighter` backed by HighlighterSwift:
+**Recommended path: depend on the `MarkdownEngineHighlighter` product
+and use the bundled `HighlighterSwiftBridge`.** Implementing
+`SyntaxHighlighter` from scratch has subtle footguns the bridge
+already handles — line-height metrics across light/dark themes,
+appearance-change observation, layout-pass timing, font name extraction
+from the theme. Use the bundle unless you specifically need a
+non-HighlighterSwift library.
 
 ```swift
 import MarkdownEngineHighlighter
@@ -104,9 +138,13 @@ configuration.services = MarkdownEditorServices(
 ```
 
 The bridge auto-switches between `atom-one-light` and `atom-one-dark`
-with system appearance. Different theme names, a pinned single theme,
-or a custom `SyntaxHighlighter` implementation are all supported — see
-DocC for the full surface.
+with system appearance. Different theme names or a pinned single theme
+are configurable via init params — see DocC.
+
+Need a different highlighter library entirely? Implement
+`SyntaxHighlighter` yourself (see [Service Protocols](#service-protocols)
+above for the declaration) and reference the bundled bridge in
+`Sources/MarkdownEngineHighlighter/` as a working example.
 
 ### Theming
 
@@ -139,9 +177,9 @@ configuration.lists.helpersEnabled = false
 
 ### Wiki-Links & Replacement State
 
-Two optional bindings let you observe wiki-link state and push inline
-replacements programmatically. Pass only what you need — each is
-independent and defaults to a no-op:
+Two optional bindings on `NativeTextViewWrapper` let you observe
+wiki-link state and push inline replacements programmatically. Pass
+only what you need — each is independent and defaults to a no-op:
 
 ```swift
 NativeTextViewWrapper(
@@ -156,37 +194,6 @@ NativeTextViewWrapper(
 - `pendingInlineReplacement` — assign a non-nil value to push a
   replacement (e.g. an autocomplete result); the engine consumes it
   and clears the binding.
-
-### Custom Services
-
-The engine talks to your app through four service protocols, each with
-a no-op default so you only implement what you actually need:
-
-| Protocol | What you supply | Suggested library |
-|---|---|---|
-| `WikiLinkResolver` | Resolve a `[[Name]]` to a stable opaque id | (your data model) |
-| `EmbeddedImageProvider` | Look up an `NSImage` for `![[Name]]` | (your asset store) |
-| `SyntaxHighlighter` | Highlight code blocks for a given language | [HighlighterSwift](https://github.com/smittytone/HighlighterSwift) — or use the bundled bridge above |
-| `LatexRenderer` | Render a LaTeX string to an `NSImage` | [SwiftMath](https://github.com/mgriebling/SwiftMath) |
-
-Implement what you need and pass it through `MarkdownEditorServices`:
-
-```swift
-struct MyResolver: WikiLinkResolver {
-    func resolve(displayName: String, range: NSRange) -> WikiLinkResolution? {
-        myIndex[displayName].map { WikiLinkResolution(id: $0, exists: true) }
-    }
-}
-
-configuration.services = MarkdownEditorServices(
-    wikiLinks: MyResolver()
-    // images, syntaxHighlighter, latex omitted → no-op defaults
-)
-```
-
-Each protocol and its no-op default (`NoOpWikiLinkResolver`,
-`NoOpEmbeddedImageProvider`, `PlainTextSyntaxHighlighter`,
-`NoOpLatexRenderer`) is documented in DocC.
 
 ## Demo
 
