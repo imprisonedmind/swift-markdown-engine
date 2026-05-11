@@ -74,11 +74,12 @@ targets: [
 
 Or in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
 
-The package also ships an optional `MarkdownEngineHighlighter` product
-for turnkey syntax highlighting via HighlighterSwift — add it as a
-second product dependency if you want it (see [Customization →
-Syntax Highlighting](#syntax-highlighting)). The core `MarkdownEngine`
-library stays HighlighterSwift-free.
+The package ships two library products — add only what you need:
+
+| Product | Use when |
+|---|---|
+| `MarkdownEngine` | You want the editor only. Zero external dependencies. |
+| `MarkdownEngineHighlighter` | You want fenced-code syntax highlighting without writing your own bridge. Pulls in [HighlighterSwift](https://github.com/smittytone/HighlighterSwift) transitively. See [Customization → Syntax Highlighting](#syntax-highlighting). |
 
 ## Quick Start
 
