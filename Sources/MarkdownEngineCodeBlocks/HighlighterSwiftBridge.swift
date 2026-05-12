@@ -11,47 +11,59 @@ import Highlighter
 import MarkdownEngine
 
 extension Notification.Name {
-    /// Posted by ``HighlighterSwiftBridge`` after the macOS appearance flips
-    /// and the bridge has re-applied its light/dark theme. The engine
-    /// subscribes to this through ``SyntaxHighlighter/appearanceDidChangeNotification``
-    /// so it can invalidate cached code-block attributes.
+    /// Posted by ``HighlighterSwiftBridge`` after the macOS appearance flips and themes are re-applied; the engine subscribes via ``SyntaxHighlighter/appearanceDidChangeNotification`` to invalidate cached attributes.
     public static let markdownEngineHighlighterDidChangeAppearance =
         Notification.Name("MarkdownEngineHighlighterDidChangeAppearance")
 }
 
-/// A drop-in ``SyntaxHighlighter`` backed by HighlighterSwift.
+/// Drop-in ``SyntaxHighlighter`` backed by HighlighterSwift.
 ///
-/// Delegates the editor's code-block background color and code font to
-/// HighlighterSwift's loaded theme, so changing the theme name updates
-/// the entire code-block look in one place.
+/// Defaults match the Nodes app's look: opaque light/dark code-block
+/// backgrounds and an `SF Mono → Menlo → system monospace` font chain.
+/// Override the init params if you'd rather adopt HighlighterSwift's
+/// CSS-theme-driven background/font directly.
 ///
-/// When `autoSwitchAppearance` is `true` (the default), the bridge
-/// observes `AppleInterfaceThemeChangedNotification` and re-applies
-/// `darkTheme` / `lightTheme` accordingly, then posts
+/// When `autoSwitchAppearance` is `true`, the bridge observes
+/// `AppleInterfaceThemeChangedNotification` and swaps `lightTheme` /
+/// `darkTheme` accordingly, posting
 /// ``Notification/Name/markdownEngineHighlighterDidChangeAppearance`` so
-/// the engine re-renders affected code blocks.
+/// the engine can re-render code blocks.
 public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendable {
     private let highlighter: Highlighter?
     private let lightTheme: String
     private let darkTheme: String
     private let autoSwitchAppearance: Bool
+    private let lightBackground: NSColor
+    private let darkBackground: NSColor
+    private let preferredFontNames: [String]
     private var currentTheme: String = ""
 
     /// - Parameters:
     ///   - lightTheme: HighlighterSwift theme name applied in light mode.
     ///   - darkTheme: HighlighterSwift theme name applied in dark mode.
-    ///   - autoSwitchAppearance: When `true`, observes the system
-    ///     appearance and swaps themes automatically. Set to `false` to
-    ///     pin the bridge to `lightTheme` regardless of mode.
+    ///   - autoSwitchAppearance: When `true`, observes the system appearance
+    ///     and swaps themes automatically. Set to `false` to pin to `lightTheme`.
+    ///   - lightBackground: Code-block background in light mode. Pass `nil`
+    ///     to use HighlighterSwift's CSS-theme background instead.
+    ///   - darkBackground: Code-block background in dark mode. Pass `nil`
+    ///     to use HighlighterSwift's CSS-theme background instead.
+    ///   - preferredFontNames: PostScript font names tried in order before
+    ///     falling back to the system monospace font.
     public init(
         lightTheme: String = "atom-one-light",
         darkTheme: String = "atom-one-dark",
-        autoSwitchAppearance: Bool = true
+        autoSwitchAppearance: Bool = true,
+        lightBackground: NSColor? = NSColor(calibratedWhite: 0.95, alpha: 1.0),
+        darkBackground: NSColor? = NSColor(calibratedWhite: 0.13, alpha: 1.0),
+        preferredFontNames: [String] = ["SF Mono", "Menlo"]
     ) {
         self.highlighter = Highlighter()
         self.lightTheme = lightTheme
         self.darkTheme = darkTheme
         self.autoSwitchAppearance = autoSwitchAppearance
+        self.lightBackground = lightBackground ?? .clear
+        self.darkBackground = darkBackground ?? .clear
+        self.preferredFontNames = preferredFontNames
         applyAppearanceTheme()
 
         if autoSwitchAppearance {
@@ -72,13 +84,17 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
 
     private func applyAppearanceTheme() {
         guard let highlighter else { return }
-        let isDark = autoSwitchAppearance &&
-            NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let theme = isDark ? darkTheme : lightTheme
+        let theme = isDarkAppearance() ? darkTheme : lightTheme
         if currentTheme != theme {
             currentTheme = theme
             highlighter.setTheme(theme)
         }
+    }
+
+    private func isDarkAppearance() -> Bool {
+        guard autoSwitchAppearance else { return false }
+        let appearance = NSApp.keyWindow?.effectiveAppearance ?? NSApp.effectiveAppearance
+        return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
     // MARK: - SyntaxHighlighter
@@ -88,14 +104,16 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
     }
 
     public func codeFont(size: CGFloat) -> NSFont {
-        if let themeFont = highlighter?.theme.codeFont {
-            return NSFont(name: themeFont.fontName, size: size) ?? themeFont
+        for name in preferredFontNames {
+            if let font = NSFont(name: name, size: size) {
+                return font
+            }
         }
         return .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     public func backgroundColor() -> NSColor {
-        highlighter?.theme.themeBackgroundColour ?? .clear
+        isDarkAppearance() ? darkBackground : lightBackground
     }
 
     public func highlight(code: String, language: String?) -> NSAttributedString? {
