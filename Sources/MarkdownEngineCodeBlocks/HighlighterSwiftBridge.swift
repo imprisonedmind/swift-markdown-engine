@@ -38,6 +38,11 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
     private let preferredFontNames: [String]
     private var currentTheme: String = ""
 
+    // HighlighterSwift's JavaScriptCore bridge is expensive — cache by (theme, language, code).
+    private let highlightCache = NSCache<NSString, NSAttributedString>()
+    private let failedCache = NSCache<NSString, NSNumber>()
+    private var unsupportedLanguages: Set<String> = []
+
     /// - Parameters:
     ///   - lightTheme: HighlighterSwift theme name applied in light mode.
     ///   - darkTheme: HighlighterSwift theme name applied in dark mode.
@@ -64,6 +69,10 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
         self.lightBackground = lightBackground ?? .clear
         self.darkBackground = darkBackground ?? .clear
         self.preferredFontNames = preferredFontNames
+        highlightCache.countLimit = 256
+        highlightCache.totalCostLimit = 2_000_000
+        failedCache.countLimit = 256
+        failedCache.totalCostLimit = 2_000_000
         applyAppearanceTheme()
 
         if autoSwitchAppearance {
@@ -82,12 +91,20 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
         }
     }
 
+    /// Drops the internal highlight cache. Call after manual theme changes the bridge can't observe.
+    public func clearCache() {
+        highlightCache.removeAllObjects()
+        failedCache.removeAllObjects()
+    }
+
     private func applyAppearanceTheme() {
         guard let highlighter else { return }
         let theme = isDarkAppearance() ? darkTheme : lightTheme
         if currentTheme != theme {
             currentTheme = theme
             highlighter.setTheme(theme)
+            highlightCache.removeAllObjects()
+            failedCache.removeAllObjects()
         }
     }
 
@@ -119,10 +136,41 @@ public final class HighlighterSwiftBridge: SyntaxHighlighter, @unchecked Sendabl
     public func highlight(code: String, language: String?) -> NSAttributedString? {
         applyAppearanceTheme()
         guard let highlighter else { return nil }
+
         let normalized = language?.lowercased().trimmingCharacters(in: .whitespaces)
-        if let lang = normalized, !lang.isEmpty {
-            return highlighter.highlight(code, as: lang)
+        let langKey = (normalized?.isEmpty == false) ? normalized! : "auto"
+        let cacheKey = "\(currentTheme)|\(langKey)|\(code)" as NSString
+
+        if let cached = highlightCache.object(forKey: cacheKey) {
+            return cached
         }
-        return highlighter.highlight(code, as: nil)
+        if failedCache.object(forKey: cacheKey) != nil {
+            return nil
+        }
+
+        let explicit = normalized.flatMap { $0.isEmpty ? nil : $0 }
+        let skipExplicit = explicit.map { unsupportedLanguages.contains($0) } ?? false
+
+        var highlighted: NSAttributedString?
+        if let lang = explicit, !skipExplicit {
+            highlighted = highlighter.highlight(code, as: lang)
+            if highlighted == nil {
+                // Unknown language — remember and fall back to auto-detect.
+                unsupportedLanguages.insert(lang)
+                highlighted = highlighter.highlight(code)
+            }
+        } else {
+            highlighted = highlighter.highlight(code)
+        }
+
+        // Immutable copy so the cached entry can't be mutated by callers.
+        let result = highlighted.map { NSAttributedString(attributedString: $0) }
+        if let result {
+            highlightCache.setObject(result, forKey: cacheKey, cost: code.utf16.count)
+            failedCache.removeObject(forKey: cacheKey)
+            return result
+        }
+        failedCache.setObject(NSNumber(value: true), forKey: cacheKey, cost: code.utf16.count)
+        return nil
     }
 }
