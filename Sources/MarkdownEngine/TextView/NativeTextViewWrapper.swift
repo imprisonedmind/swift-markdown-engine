@@ -186,10 +186,15 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
 
         textView.recalcOverscroll(for: scrollView)
         scrollView.contentView.postsBoundsChangedNotifications = true
+        var lastObservedViewportWidth = scrollView.contentView.bounds.width
         NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
-            // Code block button overlays depend on layout-relative rects; refresh
-            // them on every frame change so window resizes don't leave stale rects.
-            context.coordinator.updateCodeBlockSelection(textView: textView)
+            // Refresh code-block overlays only on real viewport width changes, not on TextKit height-only echoes during typing.
+            let newWidth = scrollView.contentView.bounds.width
+            if abs(newWidth - lastObservedViewportWidth) > 0.5 {
+                lastObservedViewportWidth = newWidth
+                context.coordinator.didEnsureLayoutForCurrentDocument = false
+                context.coordinator.updateCodeBlockSelection(textView: textView)
+            }
             // Only react with overscroll recalc when the viewport itself resizes
             // (window resize). Without this guard, TextKit-induced textView frame
             // changes echo back here and re-trigger recalcOverscroll, causing a
@@ -286,6 +291,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.documentId = documentId
             textView.undoManager?.removeAllActions()
             context.coordinator.didInitialFormatting = false
+            context.coordinator.didEnsureLayoutForCurrentDocument = false
             context.coordinator.resetImageEmbedState()
             // Reset scroll to top of content so the previous file's scrollY
             // doesn't leak into a (potentially shorter) new file.
