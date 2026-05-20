@@ -52,8 +52,6 @@ extension MarkdownStyler {
                 .font: ctx.codeFont,
                 .backgroundColor: ctx.codeBackgroundColor
             ]))
-            // Caret inside → show backticks at full size for editing;
-            // otherwise dim them to near-invisible.
             let inlineMarkerAttributes: [NSAttributedString.Key: Any] = isActive
                 ? [
                     .foregroundColor: ctx.configuration.theme.mutedText,
