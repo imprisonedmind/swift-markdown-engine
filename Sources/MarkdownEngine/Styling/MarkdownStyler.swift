@@ -222,7 +222,9 @@ extension MarkdownStyler {
             para.minimumLineHeight = neededHeight
             para.maximumLineHeight = max(para.maximumLineHeight, neededHeight)
             para.paragraphSpacing = max(para.paragraphSpacing, paragraphSpacing)
-
+            // The anchor character is given an explicit advance equal to the
+            // image width (often wider than the text container
+            para.lineBreakMode = .byClipping
             let collapsedPara = NSMutableParagraphStyle()
             collapsedPara.maximumLineHeight = 1
             collapsedPara.paragraphSpacing = 0
