@@ -85,7 +85,6 @@ struct MarkdownLists {
 
         let indentPerLevel = configuration.lists.indentPerLevel
         let extraLineHeight = configuration.lists.extraLineHeight
-        let spaceWidth = (" " as NSString).size(withAttributes: [.font: baseFont]).width
 
         func applyListMatches(_ matches: [NSTextCheckingResult]) {
             for match in matches {
@@ -98,9 +97,8 @@ struct MarkdownLists {
                 let wsRange = match.range(at: 1)
                 let markerRange = match.range(at: 2)
                 let ws = nsText.substring(with: wsRange)
-                let tabCount = ws.filter { $0 == "\t" }.count
-                let spaceCount = ws.filter { $0 == " " }.count
-                let depthIndent = CGFloat(tabCount) * indentPerLevel + CGFloat(spaceCount) * spaceWidth
+                // CommonMark nesting: 1 tab OR 2 spaces = one level deep.
+                let depthIndent = CGFloat(MarkdownLists.indentLevel(from: ws)) * indentPerLevel
 
                 let markerString = nsText.substring(with: markerRange) as NSString
                 let markerWidth = markerString.size(withAttributes: [.font: baseFont]).width
