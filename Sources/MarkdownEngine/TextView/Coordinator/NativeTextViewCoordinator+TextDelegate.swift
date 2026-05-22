@@ -238,9 +238,16 @@ extension NativeTextViewCoordinator {
         let currentHRLine = MarkdownStyler.hrLineRange(at: selLoc, in: tv.string)
         let hrLineChanged = prevHRLine?.location != currentHRLine?.location
             || prevHRLine?.length != currentHRLine?.length
+        // Bullet markers: caret in/out of `- ` syntax flips glyph ↔ raw.
+        let prevBulletSyntax = previousCaretLocation.flatMap {
+            MarkdownStyler.bulletSyntaxRange(at: $0, in: tv.string)
+        }
+        let currentBulletSyntax = MarkdownStyler.bulletSyntaxRange(at: selLoc, in: tv.string)
+        let bulletSyntaxChanged = prevBulletSyntax?.location != currentBulletSyntax?.location
+            || prevBulletSyntax?.length != currentBulletSyntax?.length
         if shouldSkipSelectionRestyle {
             // textDidChange performs the pending restyle for this edit cycle.
-        } else if tokensChanged || taskSyntaxChanged || hrLineChanged {
+        } else if tokensChanged || taskSyntaxChanged || hrLineChanged || bulletSyntaxChanged {
             restyleTextView(tv, paragraphCandidates: paragraphCandidates, tokens: tokens)
         }
 
@@ -415,7 +422,7 @@ extension NativeTextViewCoordinator {
         let lineRange = nsText.lineRange(for: NSRange(location: caretLoc, length: 0))
         let line = nsText.substring(with: lineRange)
 
-        let pattern = #"^([\t ]*)((\d+)\.|-|•)\s"#
+        let pattern = #"^([\t ]*)((\d+)\.|[-•*+])\s"#
         let regex = try? NSRegularExpression(pattern: pattern)
         if let regex = regex,
            let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: line.utf16.count)) {
@@ -423,7 +430,11 @@ extension NativeTextViewCoordinator {
             let wsString = (line as NSString).substring(with: wsRangeLocal)
             let wsDocStart = lineRange.location + wsRangeLocal.location
             let depth = MarkdownLists.indentLevel(from: wsString)
-            if depth <= 1 {
+            // Legacy `\t• ` top-level depth=1 (synthetic tab); new format depth=0.
+            let markerString = (line as NSString).substring(with: match.range(at: 2))
+            let isLegacyBulletGlyph = markerString.first == "•"
+            let minDepth = isLegacyBulletGlyph ? 1 : 0
+            if depth <= minDepth {
                 return true
             }
 

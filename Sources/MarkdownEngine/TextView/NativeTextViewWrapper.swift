@@ -148,8 +148,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
         textView.isRichText = true
-        let normalizedInput = MarkdownLists.normalizeBulletMarkers(text)
-        let initialState = WikiLinkService.makeDisplayState(from: normalizedInput)
+        let initialState = WikiLinkService.makeDisplayState(from: text)
         textView.string = initialState.display
         textView.delegate = context.coordinator
         textView.isVerticallyResizable = true

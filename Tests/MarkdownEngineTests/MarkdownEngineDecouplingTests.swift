@@ -104,36 +104,58 @@ struct MarkdownEngineDecouplingTests {
         #expect(bus.findClearHighlights == nil)
     }
 
-    // MARK: Bullet normalization
+    // MARK: Bullet markers render via styling, never by mutating storage
 
-    @Test func dashBulletNormalizesToCanonicalBullet() {
-        let input = "- 你好\nplain line\n- second"
-        let output = MarkdownLists.normalizeBulletMarkers(input)
-        #expect(output == "\t• 你好\nplain line\n\t• second")
+    /// Locations whose styled attributes carry `.bulletMarker` (i.e. the raw
+    /// marker char is hidden and a `•` will be drawn there).
+    private func bulletMarkerLocations(_ text: String, caret: Int) -> Set<Int> {
+        let ranges = MarkdownStyler.styleAttributes(
+            text: text,
+            fontName: NSFont.systemFont(ofSize: 14).fontName,
+            fontSize: 14,
+            caretLocation: caret,
+            activeTokenIndices: [],
+            configuration: .default
+        )
+        var locations: Set<Int> = []
+        for (range, attrs) in ranges where attrs[.bulletMarker] != nil {
+            locations.insert(range.location)
+        }
+        return locations
     }
 
-    @Test func tabIndentedDashBulletKeepsItsDepth() {
-        let input = "- top\n\t- nested\n\t\t- deeper"
-        let output = MarkdownLists.normalizeBulletMarkers(input)
-        #expect(output == "\t• top\n\t\t• nested\n\t\t\t• deeper")
+    @Test func dashBulletMarkerIsHiddenAndTagged() {
+        // Caret off the marker line → the `-` at index 0 is tagged for a `•`.
+        let text = "- 你好"
+        #expect(bulletMarkerLocations(text, caret: (text as NSString).length).contains(0))
     }
 
-    @Test func horizontalRuleIsNotNormalizedAsBullet() {
-        let input = "before\n---\nafter"
-        let output = MarkdownLists.normalizeBulletMarkers(input)
-        #expect(output == input)
+    @Test func starAndPlusMarkersAreAlsoTagged() {
+        // `* a\n+ b` — markers at index 0 and 4 both render as bullets.
+        let text = "* a\n+ b"
+        let locations = bulletMarkerLocations(text, caret: (text as NSString).length)
+        #expect(locations.contains(0))
+        #expect(locations.contains(4))
     }
 
-    @Test func dashInsideFencedCodeBlockIsLeftAlone() {
-        let input = "```\n- not a bullet\n```\n- real bullet"
-        let output = MarkdownLists.normalizeBulletMarkers(input)
-        #expect(output == "```\n- not a bullet\n```\n\t• real bullet")
+    @Test func caretInsideMarkerSyntaxRevealsRawMarker() {
+        // Caret between `-` and its space → marker revealed, not tagged.
+        #expect(!bulletMarkerLocations("- item", caret: 1).contains(0))
     }
 
-    @Test func textWithoutDashBulletsIsReturnedUntouched() {
-        let input = "no bullets here\nstill nothing"
-        let output = MarkdownLists.normalizeBulletMarkers(input)
-        #expect(output == input)
+    @Test func taskCheckboxLineIsNotBulletTagged() {
+        // `- [ ]` is owned by the checkbox styler, not the bullet styler.
+        #expect(!bulletMarkerLocations("- [ ] todo", caret: 99).contains(0))
+    }
+
+    @Test func bulletInsideFencedCodeBlockIsNotTagged() {
+        // The `-` at index 4 is inside ``` … ``` and stays plain text.
+        #expect(!bulletMarkerLocations("```\n- x\n```", caret: 99).contains(4))
+    }
+
+    @Test func thematicBreakIsNotBulletTagged() {
+        // `---` has no space after the first `-`, so it is never a bullet.
+        #expect(bulletMarkerLocations("before\n---\nafter", caret: 99).isEmpty)
     }
 
     // MARK: Styler runs end-to-end with defaults

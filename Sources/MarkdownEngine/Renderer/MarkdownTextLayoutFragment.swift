@@ -21,6 +21,9 @@ extension NSAttributedString.Key {
     /// Int nesting level (1-based) of a blockquote line; the fragment
     /// paints that many vertical bars in the left gutter.
     static let blockquoteLevel = NSAttributedString.Key("BlockquoteLevel")
+    /// Marks a bullet-list marker char (`-`/`*`/`+`) whose glyph is hidden so
+    /// the fragment can paint a `•` in its place. Set to `true`.
+    static let bulletMarker = NSAttributedString.Key("BulletListMarker")
     /// CGFloat — natural image width; presence flags block as overlay-rendered.
     static let scrollableBlockNaturalWidth = NSAttributedString.Key("ScrollableBlockNaturalWidth")
     /// Int — hash of source text; key for overlay reconcile + offset persistence.
@@ -81,6 +84,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 4. Task checkboxes (on top of hidden [ ]/[x] markers)
         drawTaskCheckboxes(at: point, in: context)
+
+        // 4b. Bullet glyphs (on top of hidden -/*/+ markers)
+        drawBulletMarkers(at: point, in: context)
 
         // 5. Thematic breaks (full-width line, painted last so it doesn't
         //    fight with anything that already drew at the line's center)
@@ -483,6 +489,49 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                     )).fill()
                 }
             }
+        }
+    }
+
+    // MARK: - Bullet Markers
+
+    /// Paint a `•` over every hidden bullet marker (`.bulletMarker`). The
+    /// glyph is drawn in the same font as the source so its baseline matches
+    /// the surrounding text, and centered within the original marker char's
+    /// advance so a `•` of a different width still sits where `-`/`*`/`+` was.
+    private func drawBulletMarkers(at point: CGPoint, in context: CGContext) {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return }
+        let selectionRanges: [NSRange] = {
+            guard let tv = textLayoutManager?.textContainer?.textView else { return [] }
+            return tv.selectedRanges.map { $0.rangeValue }.filter { $0.length > 0 }
+        }()
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.current = nsContext
+
+        let theme = (textLayoutManager?.textContainer?.textView as? NativeTextView)?
+            .configuration.theme ?? .default
+        let storageString = ts.string as NSString
+
+        ts.enumerateAttribute(.bulletMarker, in: range, options: []) { [weak self] value, attrRange, _ in
+            guard let self, (value as? Bool) == true else { return }
+            // Leave a selected marker alone so the highlighted raw char shows.
+            if selectionRanges.contains(where: { NSIntersectionRange($0, attrRange).length > 0 }) { return }
+            guard let pos = self.drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
+
+            let font = (ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
+                ?? (self.textLayoutManager?.textContainer?.textView?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize))
+            let bulletAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.bodyText]
+            let bullet = "•" as NSString
+
+            let markerWidth = storageString.substring(with: attrRange).size(withAttributes: [.font: font]).width
+            let bulletWidth = bullet.size(withAttributes: bulletAttrs).width
+            let xOffset = max(0, (markerWidth - bulletWidth) / 2)
+            // Flipped context: text origin is its top edge, baseline sits one
+            // ascent below — so top = baseline − ascent aligns the glyph.
+            let topY = pos.baselineY - font.ascender
+            bullet.draw(at: CGPoint(x: pos.x + xOffset, y: topY), withAttributes: bulletAttrs)
         }
     }
 

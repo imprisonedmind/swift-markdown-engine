@@ -27,8 +27,9 @@ struct MarkdownLists {
         textView.didChangeText()
     }
 
+    // Markers: `-`/`*`/`+` (raw Markdown) + legacy `•` (rendered, never typed).
     static let listRegex = try! NSRegularExpression(
-        pattern: #"^\s*((?:(\d+)\.|[-•])(?:\s+\[[ xX]\])?\s+)"#
+        pattern: #"^\s*((?:(\d+)\.|[-•*+])(?:\s+\[[ xX]\])?\s+)"#
     )
     /// CommonMark blockquote line: ≤3 spaces of leading indent, then a run
     /// of `>` markers, then an optional single space before content. The
@@ -38,18 +39,7 @@ struct MarkdownLists {
         pattern: #"^( {0,3})(>+(?:[ \t]+>+)*)"#
     )
     static let dashNoSpaceRegex = try! NSRegularExpression(pattern: #"^\s*-(?!\s)"#)
-    static let numberRegex = try! NSRegularExpression(pattern: #"^\s*(\d+)\.$"#)
     static let leadingWhitespaceRegex = try! NSRegularExpression(pattern: #"^\s*"#)
-
-    /// Matches an optionally-indented `- `, `* ` or `+ ` at the start of a
-    /// line — the three CommonMark bullet markers, with leading spaces
-    /// and/or tabs (nested items). Used by `normalizeBulletMarkers` to
-    /// convert pasted/loaded bullets into the engine's canonical
-    /// `<depth tabs>• ` form.
-    static let pasteableDashBulletRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)[-+*] "#,
-        options: [.anchorsMatchLines]
-    )
 
     static func indentLevel(from leadingWhitespace: String) -> Int {
         let tabCount = leadingWhitespace.filter { $0 == "\t" }.count
@@ -76,47 +66,6 @@ struct MarkdownLists {
         performEdit(textView, replace: removalRange, with: "")
         textView.setSelectedRange(NSRange(location: currentLineRange.location, length: 0))
         return false
-    }
-
-    // MARK: - Storage Normalization
-
-    /// Rewrite standard-Markdown bullets (`- foo`, `* foo`, `+ foo`) to the
-    /// engine's canonical bullet form (`\t• foo`) so pasted or
-    /// programmatically loaded markdown renders with the same hanging indent
-    /// and bullet glyph as bullets the user types directly. The typed-input
-    /// path already rewrites `-` → `\t• ` on space-after-dash; this closes
-    /// the gap for every other ingestion path. Code blocks are left
-    /// untouched.
-    static func normalizeBulletMarkers(_ text: String) -> String {
-        guard !text.isEmpty else { return text }
-        let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        let matches = pasteableDashBulletRegex.matches(in: text, options: [], range: fullRange)
-        guard !matches.isEmpty else { return text }
-        // Parse code-block tokens once so per-match code-block lookups stay O(tokens),
-        // not O(parse) — pasting a huge document with many dash lines would
-        // otherwise tokenize once per match.
-        let codeTokens = text.contains("`")
-            ? MarkdownTokenizer.parseTokens(in: text).filter { $0.kind == .codeBlock || $0.kind == .inlineCode }
-            : []
-        let mutable = NSMutableString(string: text)
-        // Walk in reverse so untouched offsets stay valid as we mutate.
-        for match in matches.reversed() {
-            let lineStart = match.range.location
-            if !codeTokens.isEmpty,
-               MarkdownDetection.isInsideCodeBlock(location: lineStart, codeTokens: codeTokens) {
-                continue
-            }
-            // Map the source indent (spaces and/or tabs) to a nesting
-            // depth and rewrite the whole `<ws><marker> ` prefix to the
-            // canonical `<depth+1 tabs>• `. depth+1 keeps the existing
-            // "top level = one tab" convention paragraphAttributes expects.
-            let ws = nsText.substring(with: match.range(at: 1))
-            let depth = indentLevel(from: ws)
-            let canonical = String(repeating: "\t", count: depth + 1) + "• "
-            mutable.replaceCharacters(in: match.range, with: canonical)
-        }
-        return mutable as String
     }
 
     // MARK: - Paragraph Attributes for List Styling
@@ -163,8 +112,10 @@ struct MarkdownLists {
 
                 ps.tabStops = []
                 ps.defaultTabInterval = indentPerLevel
-                ps.firstLineHeadIndent = 0
-                ps.headIndent = depthIndent + markerWidth + extraSpacing
+                // Base lead indent: top-level item lines up with where legacy `\t• ` placed it.
+                let leadIndent = indentPerLevel
+                ps.firstLineHeadIndent = leadIndent
+                ps.headIndent = leadIndent + depthIndent + markerWidth + extraSpacing
 
                 attributesList.append((match.range(at: 0), [.paragraphStyle: ps]))
             }
@@ -177,7 +128,7 @@ struct MarkdownLists {
         }
 
         // Bullet lists
-        let bulletListPattern = #"^([ \t]*)([-•](?:[ \t]+\[[ xX]\])?[ \t]+)(.*)$"#
+        let bulletListPattern = #"^([ \t]*)([-•*+](?:[ \t]+\[[ xX]\])?[ \t]+)(.*)$"#
         if let bulletListRegex = try? NSRegularExpression(pattern: bulletListPattern, options: [.anchorsMatchLines]) {
             let bulletMatches = bulletListRegex.matches(in: text, options: [], range: fullRange)
             applyListMatches(bulletMatches)
@@ -212,36 +163,6 @@ struct MarkdownLists {
         let isInCodeBlock = textView.string.contains("`")
             ? MarkdownDetection.isInsideCodeBlock(location: affectedCharRange.location, in: textView.string)
             : false
-
-        // BACKSPACE on an empty bullet prefix line ("\t+• " with no other
-        // content): undo the auto-conversion that turned a typed `-` + space
-        // into `\t• `. We collapse the whole prefix back to `-` so the user
-        // can keep deleting cleanly instead of stalling on the bullet glyph.
-        if listsEnabled,
-           replacementString.isEmpty,
-           affectedCharRange.length == 1,
-           !isInCodeBlock {
-            let nsText = textView.string as NSString
-            let safeLoc = min(affectedCharRange.location, nsText.length)
-            let lineRange = nsText.lineRange(for: NSRange(location: safeLoc, length: 0))
-            // Strip trailing newline so the regex anchors against true end-of-line.
-            var contentLength = lineRange.length
-            if contentLength > 0,
-               nsText.character(at: lineRange.location + contentLength - 1) == 0x000A {
-                contentLength -= 1
-            }
-            if contentLength > 0 {
-                let lineContentRange = NSRange(location: lineRange.location, length: contentLength)
-                let lineContent = nsText.substring(with: lineContentRange)
-                if lineContent.range(of: #"^\t+• $"#, options: .regularExpression) != nil,
-                   affectedCharRange.location >= lineRange.location,
-                   affectedCharRange.location < lineRange.location + contentLength {
-                    MarkdownLists.performEdit(textView, replace: lineContentRange, with: "-")
-                    textView.setSelectedRange(NSRange(location: lineRange.location + 1, length: 0))
-                    return false
-                }
-            }
-        }
 
         if replacementString == ">" && affectedCharRange.length == 0 && !isInCodeBlock {
             let insertionLocation = affectedCharRange.location
@@ -322,34 +243,6 @@ struct MarkdownLists {
                 return false
             }
             return true
-        }
-
-        // SPACE: convert "-" or "1." to proper markers (skip in code blocks)
-        if replacementString == " " && !isInCodeBlock {
-            guard listsEnabled else { return true }
-            let insertionLocation = affectedCharRange.location
-            if insertionLocation > 0 {
-                let nsText = textView.string as NSString
-                let prevCharRange = NSRange(location: insertionLocation - 1, length: 1)
-                let prevChar = nsText.substring(with: prevCharRange)
-                let currentLineRange = nsText.lineRange(for: NSRange(location: insertionLocation - 1, length: 0))
-                let currentLine = nsText.substring(with: currentLineRange)
-                if let match = MarkdownLists.numberRegex.firstMatch(in: currentLine, range: NSRange(location: 0, length: currentLine.utf16.count)) {
-                    let numberRange = match.range(at: 1)
-                    let numberString = (currentLine as NSString).substring(with: numberRange)
-                    let markerRange = NSRange(location: currentLineRange.location + match.range.location, length: match.range.length)
-                    MarkdownLists.performEdit(textView, replace: markerRange, with: "\t\(numberString). ")
-                    return false
-                }
-                if prevChar == "-" {
-                    let beforePrevIndex = insertionLocation - 2
-                    let isAtLineStart: Bool = (beforePrevIndex < 0) || nsText.substring(with: NSRange(location: beforePrevIndex, length: 1)) == "\n"
-                    if isAtLineStart {
-                        MarkdownLists.performEdit(textView, replace: prevCharRange, with: "\t• ")
-                        return false
-                    }
-                }
-            }
         }
 
         // ENTER: list continuation/outdent
@@ -448,12 +341,15 @@ struct MarkdownLists {
                         newListItem = "\n" + leadingWhitespace + "\(number + 1). "
                     }
                 } else {
-                    let prefixIndent = leadingWhitespace.isEmpty ? "  " : leadingWhitespace
+                    // Continue the bullet with the user's own marker char
+                    // (normalize a legacy `•` to `-`), preserving the line's
+                    // exact leading whitespace so nesting carries over. Storage
+                    // stays raw Markdown — the `•` glyph is drawn, not stored.
+                    let bulletChar = (marker.first == "•") ? "-" : String(marker.prefix(1))
                     if hasCheckbox {
-                        let bulletChar = marker.contains("•") ? "•" : "-"
-                        newListItem = "\n" + prefixIndent + "\(bulletChar) [ ] "
+                        newListItem = "\n" + leadingWhitespace + bulletChar + " [ ] "
                     } else {
-                        newListItem = "\n" + prefixIndent + marker + " "
+                        newListItem = "\n" + leadingWhitespace + bulletChar + " "
                     }
                 }
                 MarkdownLists.performEdit(textView, replace: affectedCharRange, with: newListItem)

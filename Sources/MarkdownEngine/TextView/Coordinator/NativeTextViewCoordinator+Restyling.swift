@@ -19,12 +19,8 @@ extension NativeTextViewCoordinator {
         from text: String,
         invalidateLayout: Bool = false
     ) {
-        // Canonicalize standard-Markdown bullets (`- `/`* `/`+ `, incl.
-        // space-indented nested) to the engine's `\t• ` form for display.
-        // lastSyncedText stays the ORIGINAL text so the binding-change
-        // guard in updateNSView keeps working.
-        let normalizedInput = MarkdownLists.normalizeBulletMarkers(text)
-        let displayState = WikiLinkService.makeDisplayState(from: normalizedInput)
+        // Storage is raw Markdown; only wiki links transform on display.
+        let displayState = WikiLinkService.makeDisplayState(from: text)
         let displayText = displayState.display
         wikiLinkMetadata = displayState.metadata
 

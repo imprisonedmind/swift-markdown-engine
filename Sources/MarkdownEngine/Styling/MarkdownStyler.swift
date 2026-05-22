@@ -173,6 +173,7 @@ enum MarkdownStyler {
         result += styleTables(ctx)
         result += styleIncompleteLinkBrackets(ctx)
         result += styleTaskCheckboxes(ctx)
+        result += styleBulletMarkers(ctx)
         result += shrinkInactiveMarkers(ctx)
         return result
     }
