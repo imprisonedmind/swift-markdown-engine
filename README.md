@@ -30,11 +30,11 @@ When we started building **[Nodes](https://apps.apple.com/de/app/nodes-by-the-we
 
 ## Features
 
-- **Live Markdown styling** — bold, italic, headings, lists, code, links,
-  task checkboxes, horizontal rules
+- **Live Markdown styling** — bold, italic, strikethrough, headings, lists, blockquotes, GFM tables, code, links, task checkboxes, horizontal rules 
 - **Wiki-style linking** with two-form storage / display roundtripping
   (`[[Name|<id>]]` ↔ `[[Name]]`)
-- **Image embeds** — `![[Name]]` syntax, embedder supplies the bytes
+- **Image embeds** — both `![[Name]]` (Obsidian-style, embedder supplies the                           
+  bytes) and standard Markdown `![alt](url)`
 - **LaTeX** — both block (`$$ … $$`) and inline (`$…$`), embedder supplies
   the renderer
 - **Code blocks** with embedder-supplied syntax highlighting and overlayable
