@@ -87,6 +87,11 @@ extension NativeTextView {
 
     private func sanitizePastedText(_ s: String) -> String {
         var out = s
+        // Normalize pasted bullet glyphs (• ‣ ◦ ·) at line start to Markdown '- ' lists.
+        if let bulletRegex = try? NSRegularExpression(pattern: #"^([ \t]*)[•‣◦·][ \t]+"#, options: [.anchorsMatchLines]) {
+            let nsRange = NSRange(location: 0, length: (out as NSString).length)
+            out = bulletRegex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "$1- ")
+        }
         if let regex = try? NSRegularExpression(pattern: "\\n{3,}") {
             let nsRange = NSRange(location: 0, length: (out as NSString).length)
             out = regex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "\n\n")
