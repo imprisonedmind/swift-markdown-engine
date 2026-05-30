@@ -27,6 +27,7 @@ enum BlockKind: Equatable {
     case paragraph       // inline-bearing
     case heading         // single ATX line (`# …`), inline-bearing content
     case blockquote      // consecutive `>` lines, inline-bearing per line
+    case list            // consecutive list-item lines (`-`/`*`/`+` or `1.`/`1)`)
     case fencedCode      // ```…``` — opaque (no inline parsing inside)
     case blockLatex      // $$…$$ — opaque
     case table           // GFM table — opaque (rendered as a unit)
@@ -98,13 +99,21 @@ enum BlockParser {
                 blocks.append(Block(kind: .blockquote, range: union(lines[i...end])))
                 i = end + 1
 
+            } else if isListItem(line) {
+                // Consecutive list-item lines form one list block; per-item
+                // detail (marker/ordered/task/indent) is parsed in DocumentAST.
+                var end = i
+                while end + 1 < lines.count, isListItem(lineText(end + 1)) { end += 1 }
+                blocks.append(Block(kind: .list, range: union(lines[i...end])))
+                i = end + 1
+
             } else {
                 // Paragraph: merge consecutive plain (non-blank, non-special) lines.
                 var end = i
                 while end + 1 < lines.count {
                     let next = lineText(end + 1)
                     if isBlank(next) || isFence(next) || isThematicBreak(next)
-                        || isHeading(next) || isBlockquote(next) { break }
+                        || isHeading(next) || isBlockquote(next) || isListItem(next) { break }
                     end += 1
                 }
                 blocks.append(Block(kind: .paragraph, range: union(lines[i...end])))
@@ -151,6 +160,30 @@ enum BlockParser {
             rest = rest.dropFirst(); indent += 1
         }
         return rest.first == ">"
+    }
+
+    /// A list-item line: optional indent, then a bullet (`-`/`*`/`+`) or an
+    /// ordered marker (`1.` / `1)`, ≤9 digits), followed by a space/tab (or the
+    /// marker alone). Thematic breaks (`---`/`***`) are classified earlier, so
+    /// they never reach here.
+    static func isListItem(_ line: String) -> Bool {
+        var rest = Substring(line).drop { $0 == " " || $0 == "\t" }
+        guard let first = rest.first else { return false }
+        if first == "-" || first == "*" || first == "+" {
+            rest = rest.dropFirst()
+        } else if first.isNumber {
+            var digits = 0
+            while let c = rest.first, c.isNumber, digits < 9 { rest = rest.dropFirst(); digits += 1 }
+            guard let d = rest.first, d == "." || d == ")" else { return false }
+            rest = rest.dropFirst()
+        } else {
+            return false
+        }
+        // A space/tab must follow the marker. A bare `-`/`*`/`1.` is NOT a list
+        // yet — so typing `-` (or `*` to start emphasis) stays literal until a
+        // space is typed, matching the pre-AST bullet behavior.
+        guard let after = rest.first else { return false }
+        return after == " " || after == "\t"
     }
 
     private static func union(_ ranges: ArraySlice<NSRange>) -> NSRange {

@@ -14,8 +14,10 @@ import Foundation
 extension MarkdownStyler {
 
     /// Task-list line: optional indent, marker, spacer, then a `[ ]`/`[x]` box.
+    /// Marker set matches the AST's task detection (`-`/`*`/`+`/`•`/`N.`) so the
+    /// caret-crossing trigger agrees with how the styler renders the task.
     static let taskListRegex: NSRegularExpression = try! NSRegularExpression(
-        pattern: #"^([ \t]*)([-•]|\d+\.)([ \t]+)(\[[ xX]\])(?=[ \t])"#,
+        pattern: #"^([ \t]*)([-•*+]|\d+\.)([ \t]+)(\[[ xX]\])(?=[ \t])"#,
         options: [.anchorsMatchLines]
     )
 

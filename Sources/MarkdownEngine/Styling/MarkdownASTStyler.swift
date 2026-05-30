@@ -64,14 +64,6 @@ enum MarkdownASTStyler {
         )
         let blocks = DocumentAST.parse(text)
         var attrs: [StyledRange] = []
-        // List paragraph styling is text/regex-based and AST-agnostic — reuse it.
-        attrs += MarkdownLists.paragraphAttributes(
-            for: text, baseFont: baseFont, nsText: ns,
-            fullRange: NSRange(location: 0, length: ns.length),
-            listsEnabled: configuration.lists.helpersEnabled,
-            defaultLineHeight: baseLineHeight, defaultParagraphSpacing: baseParagraphSpacing,
-            configuration: configuration
-        )
         for block in blocks {
             styleBlock(block, font: baseFont, ctx: ctx, into: &attrs)
         }
@@ -80,8 +72,6 @@ enum MarkdownASTStyler {
         // Text/regex-based passes (AST-agnostic). Code ranges from the AST are
         // used for the "skip inside code" checks instead of token scanning.
         let codeRanges = collectCodeRanges(in: blocks)
-        styleTaskCheckboxes(ctx: ctx, codeRanges: codeRanges, into: &attrs)
-        styleBulletMarkers(ctx: ctx, codeRanges: codeRanges, into: &attrs)
         styleAutoLinks(ctx: ctx, codeRanges: codeRanges, into: &attrs)
         styleIncompleteLinkBrackets(ctx: ctx, codeRanges: codeRanges, into: &attrs)
         return attrs
@@ -106,6 +96,8 @@ enum MarkdownASTStyler {
             case .codeBlock(let range): ranges.append(range)
             case .paragraph(_, let inlines), .heading(_, _, _, let inlines), .blockquote(_, let inlines):
                 walk(inlines)
+            case .list(_, let items):
+                for item in items { walk(item.inlines) }
             default: break
             }
         }
@@ -118,42 +110,6 @@ enum MarkdownASTStyler {
 
     private static func regex(_ pattern: String, _ anchored: Bool = true) -> NSRegularExpression? {
         try? NSRegularExpression(pattern: pattern, options: anchored ? [.anchorsMatchLines] : [])
-    }
-
-    private static func styleTaskCheckboxes(ctx: Ctx, codeRanges: [NSRange], into attrs: inout [StyledRange]) {
-        guard let re = regex(#"^([ \t]*)([-•]|\d+\.)([ \t]+)(\[[ xX]\])(?=[ \t])"#) else { return }
-        for m in re.matches(in: ctx.text, options: [], range: ctx.fullRange) {
-            let markerR = m.range(at: 2), spacerR = m.range(at: 3), boxR = m.range(at: 4)
-            guard boxR.location != NSNotFound, !isInCode(boxR, codeRanges) else { continue }
-            // Caret editing the checkbox syntax → leave raw.
-            let syntax = NSRange(location: markerR.location, length: NSMaxRange(boxR) - markerR.location)
-            if NSLocationInRange(ctx.caret, syntax) || ctx.caret == NSMaxRange(boxR) { continue }
-            let checked = ctx.ns.substring(with: boxR).range(of: "[x]", options: .caseInsensitive) != nil
-            attrs.append((markerR, [.foregroundColor: NSColor.clear]))
-            attrs.append((spacerR, [.foregroundColor: NSColor.clear]))
-            attrs.append((boxR, [.taskCheckbox: checked, .foregroundColor: NSColor.clear]))
-            if checked {
-                let lineEnd = NSMaxRange(ctx.ns.lineRange(for: boxR))
-                let contentStart = NSMaxRange(boxR)
-                if lineEnd > contentStart {
-                    attrs.append((NSRange(location: contentStart, length: lineEnd - contentStart), [
-                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                        .strikethroughColor: ctx.theme.strikethroughColor,
-                    ]))
-                }
-            }
-        }
-    }
-
-    private static func styleBulletMarkers(ctx: Ctx, codeRanges: [NSRange], into attrs: inout [StyledRange]) {
-        guard ctx.config.lists.helpersEnabled, let re = regex(#"^([ \t]*)([-*+])([ \t]+)(?!\[[ xX]\])"#) else { return }
-        for m in re.matches(in: ctx.text, options: [], range: ctx.fullRange) {
-            let markerR = m.range(at: 2)
-            guard markerR.location != NSNotFound, !isInCode(markerR, codeRanges) else { continue }
-            let syntax = NSRange(location: markerR.location, length: NSMaxRange(m.range(at: 3)) - markerR.location)
-            if NSLocationInRange(ctx.caret, syntax) { continue }
-            attrs.append((markerR, [.bulletMarker: true, .foregroundColor: NSColor.clear]))
-        }
     }
 
     /// Thematic break (`---`/`***`/`___`) styling, driven by the AST node (so a
@@ -171,6 +127,68 @@ enum MarkdownASTStyler {
               !(NSLocationInRange(ctx.caret, hr) || ctx.caret == NSMaxRange(hr)) else { return }
         attrs.append((hr, [.foregroundColor: NSColor.clear, .thematicBreak: true]))
         attrs.append((hr, [.paragraphStyle: NSMutableParagraphStyle()]))
+    }
+
+    /// List-item decoration from the AST node: indent paragraph style (mirrors
+    /// the former `MarkdownLists.paragraphAttributes`), the `•` bullet glyph, and
+    /// the task checkbox + strikethrough — all caret-aware (the raw marker is
+    /// revealed while the caret edits it). Replaces the bullet/task/list-indent
+    /// regex passes.
+    private static func styleListItem(_ item: ListItem, ctx: Ctx, into attrs: inout [StyledRange]) {
+        guard ctx.config.lists.helpersEnabled else { return }
+
+        // Line content (item line minus its trailing newline).
+        var line = item.range
+        while line.length > 0 {
+            let last = ctx.ns.character(at: NSMaxRange(line) - 1)
+            guard last == 0x0A || last == 0x0D else { break }
+            line.length -= 1
+        }
+
+        // 1. Indent paragraph style (hanging indent so wrapped lines align).
+        let wsRange = NSRange(location: item.range.location, length: item.marker.location - item.range.location)
+        let ws = ctx.ns.substring(with: wsRange)
+        let markerGroup = NSRange(location: item.marker.location,
+                                  length: item.contentRange.location - item.marker.location)
+        let markerWidth = (ctx.ns.substring(with: markerGroup) as NSString)
+            .size(withAttributes: [.font: ctx.baseFont]).width
+        let depthIndent = CGFloat(MarkdownLists.indentLevel(from: ws)) * ctx.config.lists.indentPerLevel
+        let extraSpacing = (item.checkbox != nil && !item.checked)
+            ? HeadingHelpers.checkboxExtraSpacing(font: ctx.baseFont, configuration: ctx.config.checkbox)
+            : 0
+        let ps = NSMutableParagraphStyle()
+        let lineHeight = ctx.baseLineHeight + ctx.config.lists.extraLineHeight
+        ps.minimumLineHeight = lineHeight
+        ps.maximumLineHeight = lineHeight
+        ps.lineSpacing = 0
+        ps.paragraphSpacing = ctx.baseParagraphSpacing
+        ps.paragraphSpacingBefore = 0
+        ps.tabStops = []
+        ps.defaultTabInterval = ctx.config.lists.indentPerLevel
+        ps.firstLineHeadIndent = ctx.config.lists.indentPerLevel
+        ps.headIndent = ctx.config.lists.indentPerLevel + depthIndent + markerWidth + extraSpacing
+        attrs.append((line, [.paragraphStyle: ps]))
+
+        // 2. Marker decoration (suppressed while the caret edits the syntax).
+        if let box = item.checkbox {
+            let syntax = NSRange(location: item.marker.location, length: NSMaxRange(box) - item.marker.location)
+            if NSLocationInRange(ctx.caret, syntax) || ctx.caret == NSMaxRange(box) { return }
+            let spacer = NSRange(location: NSMaxRange(item.marker), length: box.location - NSMaxRange(item.marker))
+            attrs.append((item.marker, [.foregroundColor: NSColor.clear]))
+            if spacer.length > 0 { attrs.append((spacer, [.foregroundColor: NSColor.clear])) }
+            attrs.append((box, [.taskCheckbox: item.checked, .foregroundColor: NSColor.clear]))
+            if item.checked, NSMaxRange(item.range) > NSMaxRange(box) {
+                attrs.append((NSRange(location: NSMaxRange(box), length: NSMaxRange(item.range) - NSMaxRange(box)), [
+                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                    .strikethroughColor: ctx.theme.strikethroughColor,
+                ]))
+            }
+        } else if !item.ordered {
+            let syntax = NSRange(location: item.marker.location,
+                                 length: item.contentRange.location - item.marker.location)
+            if NSLocationInRange(ctx.caret, syntax) { return }
+            attrs.append((item.marker, [.bulletMarker: true, .foregroundColor: NSColor.clear]))
+        }
     }
 
     private static func styleAutoLinks(ctx: Ctx, codeRanges: [NSRange], into attrs: inout [StyledRange]) {
@@ -247,6 +265,12 @@ enum MarkdownASTStyler {
         case .blockquote(let range, let inlines):
             styleBlockquote(range: range, ctx: ctx, into: &attrs)
             styleInlines(inlines, font: font, ctx: ctx, into: &attrs)
+
+        case .list(_, let items):
+            for item in items {
+                styleListItem(item, ctx: ctx, into: &attrs)
+                styleInlines(item.inlines, font: font, ctx: ctx, into: &attrs)
+            }
 
         case .codeBlock(let range):
             styleCodeBlock(range: range, ctx: ctx, into: &attrs)
@@ -458,6 +482,10 @@ enum MarkdownASTStyler {
                 shrinkInlineMarkers(inlines, ctx: ctx, into: &attrs)
             case .paragraph(_, let inlines), .blockquote(_, let inlines):
                 shrinkInlineMarkers(inlines, ctx: ctx, into: &attrs)
+            case .list(_, let items):
+                // Phase A: shrink only the items' inline markers; the list
+                // marker itself is still hidden by the bullet/task text pass.
+                for item in items { shrinkInlineMarkers(item.inlines, ctx: ctx, into: &attrs) }
             case .codeBlock, .blockLatex, .table, .thematicBreak, .blank:
                 break
             }
