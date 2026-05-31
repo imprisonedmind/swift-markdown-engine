@@ -71,7 +71,14 @@ extension MarkdownToken {
             return false
         }
         let paragraphEnd = NSMaxRange(paragraphRange)
-        let isAtLastParagraphEnd = selectionLocation == text.length && paragraphEnd == text.length
+        // Keep the source revealed when the caret sits at the very end of the
+        // document right after the image — but NOT when that paragraph ends in a
+        // newline, i.e. the caret jumped to a fresh line below (the user pressed
+        // Enter). Otherwise the syntax stays revealed until the next keystroke.
+        let endsWithNewline = paragraphEnd > paragraphRange.location
+            && (text.character(at: paragraphEnd - 1) == 0x0A || text.character(at: paragraphEnd - 1) == 0x0D)
+        let isAtLastParagraphEnd = selectionLocation == text.length
+            && paragraphEnd == text.length && !endsWithNewline
         return (selectionLocation >= paragraphRange.location && selectionLocation < paragraphEnd)
             || isAtLastParagraphEnd
     }

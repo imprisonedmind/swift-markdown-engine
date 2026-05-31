@@ -77,12 +77,23 @@ extension NativeTextView {
         // Anchor: ensure the last fragment is laid out (also gives a max-Y fallback
         // in case `enumerateTextSegments` misses the trailing extra-line fragment).
         var fragmentMaxY: CGFloat = 0
+        var visited = 0
         textLayoutManager.enumerateTextLayoutFragments(
             from: documentEnd,
             options: [.reverse, .ensuresLayout, .ensuresExtraLineFragment]
         ) { fragment in
-            fragmentMaxY = fragment.layoutFragmentFrame.maxY
-            return false
+            let frame = fragment.layoutFragmentFrame
+            fragmentMaxY = max(fragmentMaxY, frame.maxY)
+            // A trailing block image (LaTeX/embed) draws below the text in the last
+            // paragraph's paragraphSpacing, which TextKit omits from the layout
+            // height — so the image on the last line wouldn't be scrollable. Its
+            // extent shows up in the rendering surface; count it (ignoring the few-pt
+            // overdraw normal fragments carry). The image sits on the line before the
+            // trailing extra-line fragment, so visit a few fragments.
+            let surfaceMaxY = frame.origin.y + fragment.renderingSurfaceBounds.maxY
+            if surfaceMaxY > frame.maxY + 8 { fragmentMaxY = max(fragmentMaxY, surfaceMaxY) }
+            visited += 1
+            return visited < 3
         }
 
         // End-segment maxY = authoritative document height in TextKit 2.
