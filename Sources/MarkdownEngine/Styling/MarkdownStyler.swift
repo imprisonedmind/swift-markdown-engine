@@ -19,26 +19,14 @@ import Foundation
 
 extension MarkdownStyler {
     struct StylingContext {
-        let text: String
         let nsText: NSString
-        let fullRange: NSRange
-        // When non-nil, scan-based sub-methods only scan these ranges.
-        let scopedRanges: [NSRange]?
         let tokens: [MarkdownToken]
         let codeTokens: [MarkdownToken]
         let activeTokenIndices: Set<Int>
         let baseFont: NSFont
-        let baseDescriptor: NSFontDescriptor
-        let fontName: String
-        let caretLocation: Int
         let layoutBridge: LayoutBridge?
         let baseDefaultLineHeight: CGFloat
-        let baseParagraphSpacing: CGFloat
-        let codeFont: NSFont
         let codeBackgroundColor: NSColor
-        let codeParagraphStyle: NSParagraphStyle
-        let hiddenMarkerFont: NSFont
-        let inlineMarkerFont: NSFont
         let latexMarkerFont: NSFont
         let configuration: MarkdownEditorConfiguration
 
@@ -66,57 +54,23 @@ enum MarkdownStyler {
     ) -> [StyledRange] {
         let tokens = precomputedTokens ?? MarkdownTokenizer.parseTokensViaAST(in: text)
         let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
         let codeTokens = tokens.filter { $0.kind == .codeBlock || $0.kind == .inlineCode }
         let baseFont = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
         let baseDefaultLineHeight = ceil(
             layoutBridge?.defaultLineHeight(for: baseFont)
             ?? (baseFont.ascender - baseFont.descender + baseFont.leading)
         )
-        let baseParagraphSpacing = ceil(baseDefaultLineHeight * configuration.paragraph.spacingFactor)
-
-        let codeFontSize = round(fontSize * configuration.codeBlock.fontSizeScale)
-        let codeFont = configuration.services.syntaxHighlighter.codeFont(size: codeFontSize)
         let codeBackgroundColor = configuration.services.syntaxHighlighter.backgroundColor()
-        let codeLineHeight: CGFloat = layoutBridge?.defaultLineHeight(for: codeFont)
-            ?? (codeFont.ascender - codeFont.descender + codeFont.leading)
-        let codeParagraphStyle: NSParagraphStyle = {
-            let style = NSMutableParagraphStyle()
-            style.lineBreakMode = .byCharWrapping
-            style.lineSpacing = 0
-            let codeBlockSpacing = configuration.codeBlock.paragraphSpacing
-            let codeBlockIndent = configuration.codeBlock.horizontalIndent
-            style.paragraphSpacingBefore = codeBlockSpacing
-            style.paragraphSpacing = codeBlockSpacing
-            style.headIndent = codeBlockIndent
-            style.firstLineHeadIndent = codeBlockIndent
-            style.tailIndent = -codeBlockIndent
-            style.minimumLineHeight = ceil(codeLineHeight)
-            style.maximumLineHeight = ceil(codeLineHeight)
-            return style
-        }()
-
         let hiddenMarkerSize = configuration.markers.hiddenMarkerFontSize
         let ctx = StylingContext(
-            text: text,
             nsText: nsText,
-            fullRange: fullRange,
-            scopedRanges: scopedRanges,
             tokens: tokens,
             codeTokens: codeTokens,
             activeTokenIndices: activeTokenIndices,
             baseFont: baseFont,
-            baseDescriptor: baseFont.fontDescriptor,
-            fontName: fontName,
-            caretLocation: caretLocation,
             layoutBridge: layoutBridge,
             baseDefaultLineHeight: baseDefaultLineHeight,
-            baseParagraphSpacing: baseParagraphSpacing,
-            codeFont: codeFont,
             codeBackgroundColor: codeBackgroundColor,
-            codeParagraphStyle: codeParagraphStyle,
-            hiddenMarkerFont: codeFont,
-            inlineMarkerFont: NSFont.systemFont(ofSize: hiddenMarkerSize),
             latexMarkerFont: NSFont(name: fontName, size: hiddenMarkerSize)
                 ?? NSFont.systemFont(ofSize: hiddenMarkerSize),
             configuration: configuration
