@@ -70,6 +70,8 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var pendingEditedRange: NSRange? = nil
     var pendingPreEditActiveTokenIndices: Set<Int>? = nil
     var previousCaretLocation: Int? = nil
+    /// Drag-select suppressed a restyle; replayed on the next non-drag selection change.
+    var needsRestyleAfterDrag = false
 
     var cachedCodeBlockTokens: [(index: Int, token: MarkdownToken)] = []
     var cachedParsedText: String?
