@@ -65,6 +65,26 @@ struct MarkdownLists {
         return false
     }
 
+    /// Mirror Enter-key quote continuation for multi-line pastes: when `location`
+    /// sits on a blockquote line, prefix every line after the first with that
+    /// line's `>` marker run so the whole paste stays inside the quote. Returns
+    /// `pasted` unchanged when it has no newline or the caret isn't in a quote.
+    static func blockquoteContinuedPaste(_ pasted: String, at location: Int, in document: String) -> String {
+        guard pasted.contains("\n") else { return pasted }
+        let ns = document as NSString
+        guard location >= 0, location <= ns.length else { return pasted }
+        let lineRange = ns.lineRange(for: NSRange(location: location, length: 0))
+        let nsLine = ns.substring(with: lineRange) as NSString
+        guard let match = blockquoteRegex.firstMatch(
+            in: nsLine as String,
+            range: NSRange(location: 0, length: nsLine.length)
+        ) else { return pasted }
+        let ws = nsLine.substring(with: match.range(at: 1))
+        let markers = nsLine.substring(with: match.range(at: 2))
+        let prefix = ws + markers + " "
+        return pasted.replacingOccurrences(of: "\n", with: "\n" + prefix)
+    }
+
     // MARK: - Input Handling
 
     static func handleInsertion(textView: NSTextView, affectedCharRange: NSRange, replacementString: String?) -> Bool {
