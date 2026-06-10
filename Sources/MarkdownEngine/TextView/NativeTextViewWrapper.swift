@@ -155,7 +155,13 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             fatalError("NSTextView did not create a TextKit 2 stack on this OS version")
         }
         textContainer.lineFragmentPadding = 0
-        textContainer.widthTracksTextView = true
+        if let readingWidth = configuration.readingWidth {
+            // Fix wrap width at readingWidth so text never re-wraps on resize; only the column's position moves.
+            textContainer.widthTracksTextView = false
+            textContainer.size = NSSize(width: readingWidth, height: .greatestFiniteMagnitude)
+        } else {
+            textContainer.widthTracksTextView = true
+        }
         textView.textContainerInset = NSSize(
             width: configuration.textInsets.horizontal,
             height: configuration.textInsets.vertical
@@ -180,7 +186,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.postsFrameChangedNotifications = true
-        textView.autoresizingMask = [.width]
+        // Width and origin are driven by the container document view (see below).
+        textView.autoresizingMask = []
         textView.backgroundColor = .clear
         // Layer-back the text view for smooth scrolling. The scroll-away header is now
         // a SIBLING of the text view inside the container (`NativeTextViewContainer`),
@@ -212,18 +219,20 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.layoutBridge = bridge
         textView.layoutBridge = bridge
 
-        // The document view is a container that stacks the (optional) scroll-away header
-        // ABOVE the text view as siblings (see `NativeTextViewContainer`). The text view
-        // keeps managing its own height; the container offsets it below the header band
-        // and sizes itself to the sum. This makes body/header overlap geometrically
-        // impossible (disjoint frames), replacing the old in-text-view header hosting.
+        // The document view is ALWAYS a container (`NativeTextViewContainer`) hosting
+        // the text view, the optional scroll-away header (a top band stacked ABOVE the
+        // text view as a sibling — disjoint frames, so body/header overlap is
+        // geometrically impossible), and, in reading-column mode, the full-width
+        // wide-table overlays around the centered fixed-width column. The text view
+        // keeps managing its own height; the container offsets it below the header
+        // band and sizes itself to the sum.
         let vpSize = scrollView.contentView.bounds.size
         let container = NativeTextViewContainer(frame: NSRect(origin: .zero, size: vpSize))
         container.autoresizingMask = [.width]
         container.clipsToBounds = true
         container.textView = textView
-        textView.autoresizingMask = []   // width + origin are driven by the container
-        textView.frame = NSRect(x: 0, y: 0, width: vpSize.width, height: textView.frame.height)
+        let initialWidth = configuration.readingWidth != nil ? textView.readingColumnWidth : vpSize.width
+        textView.frame = NSRect(x: 0, y: 0, width: initialWidth, height: textView.frame.height)
         container.addSubview(textView)
         scrollView.documentView = container
         // Force full-document layout at init so paragraph heights are known
@@ -241,6 +250,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
 
         textView.recalcOverscroll(for: scrollView)
+        // Initial reading-column centering; the resize observer below handles later changes.
+        if configuration.readingWidth != nil {
+            textView.centerReadingColumn(forClipWidth: scrollView.contentView.bounds.width)
+        }
         scrollView.contentView.postsBoundsChangedNotifications = true
         var lastObservedViewportWidth = scrollView.contentView.bounds.width
         NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
@@ -248,6 +261,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             let newWidth = scrollView.contentView.bounds.width
             if abs(newWidth - lastObservedViewportWidth) > 0.5 {
                 lastObservedViewportWidth = newWidth
+                // Re-center the column by position (no redraw) so it stays smooth during live resize.
+                if configuration.readingWidth != nil {
+                    textView.centerReadingColumn(forClipWidth: newWidth)
+                }
                 context.coordinator.didEnsureLayoutForCurrentDocument = false
                 context.coordinator.updateCodeBlockSelection(textView: textView)
             }
@@ -275,8 +292,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
-        guard let container = nsView.documentView as? NativeTextViewContainer,
-              let textView = container.textView else { return }
+        guard let textView = nsView.nativeTextView else { return }
         reconcileHeader(textView: textView, context: context)
 
         let isNodeSwitch = context.coordinator.documentId != documentId
@@ -306,11 +322,13 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         if nsView.autohidesScrollers != configuration.scrollers.autohidesScrollers {
             nsView.autohidesScrollers = configuration.scrollers.autohidesScrollers
         }
+        // Reading column centers by POSITION (container subview), so the text inset is constant.
         let desiredTextInset = NSSize(
             width: configuration.textInsets.horizontal,
             height: configuration.textInsets.vertical
         )
-        if textView.textContainerInset != desiredTextInset {
+        if abs(textView.textContainerInset.width - desiredTextInset.width) > 0.5
+            || abs(textView.textContainerInset.height - desiredTextInset.height) > 0.5 {
             textView.textContainerInset = desiredTextInset
         }
         // Refresh services/theme when the embedder hands us a new configuration

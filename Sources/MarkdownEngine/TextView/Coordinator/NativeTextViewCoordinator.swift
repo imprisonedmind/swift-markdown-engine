@@ -288,11 +288,12 @@ extension NSTextView {
         let containerOrigin = textContainerOrigin
         boundingRect.origin.x += containerOrigin.x
         boundingRect.origin.y += containerOrigin.y
-        // The text view now sits BELOW a header band inside a container document view,
-        // so its glyph rects (text-view-local) must be lifted into the document view's
-        // space before subtracting the scroll offset (which is in document-view space).
-        // `convert(.zero, to: doc)` yields (0, headerHeight); it self-zeroes if this text
-        // view ever IS the document view (header-less / legacy).
+        // The text view sits inside a container document view, offset by the header
+        // band (y) and the reading-column centering (x), so its glyph rects
+        // (text-view-local) must be lifted into the document view's space before
+        // subtracting the scroll offset (which is in document-view space).
+        // `convert(.zero, to: doc)` covers both offsets and self-zeroes if this text
+        // view ever IS the document view.
         if let scrollView = enclosingScrollView {
             if let doc = scrollView.documentView, doc !== self {
                 let originInDoc = convert(CGPoint.zero, to: doc)

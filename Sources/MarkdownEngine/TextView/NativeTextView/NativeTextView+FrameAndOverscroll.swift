@@ -99,6 +99,11 @@ extension NativeTextView {
         return max(ceil(rawHeight + (textContainerInset.height * 2)), minimumContentHeight)
     }
 
+    /// Fixed reading-column width = wrap width + horizontal insets on both sides.
+    var readingColumnWidth: CGFloat {
+        (configuration.readingWidth ?? 0) + configuration.textInsets.horizontal * 2
+    }
+
     func applyManagedFrameSize(width: CGFloat) {
         let contentHeight = max(ceil(baseContentHeight + activeBottomOverscroll), 0)
         // The container stacks a header band ABOVE this text view, so the text view only
@@ -106,9 +111,13 @@ extension NativeTextView {
         // the viewport on short docs (header + textView ≥ viewport).
         let headerH = (superview as? NativeTextViewContainer)?.headerHeight ?? 0
         let scrollViewHeight = max((enclosingScrollView?.contentView.bounds.height ?? 0) - headerH, 0)
+        let height = max(contentHeight, scrollViewHeight)
+        // Reading column: the column keeps its fixed wrap width; its centered X is
+        // owned by `centerReadingColumn` (driven from the container's restack).
+        let targetWidth = configuration.readingWidth != nil ? readingColumnWidth : max(width, 0)
         let targetSize = NSSize(
-            width: max(width, 0),
-            height: max(contentHeight, scrollViewHeight)
+            width: targetWidth,
+            height: height
         )
         guard abs(targetSize.width - frame.size.width) > 0.5 || abs(targetSize.height - frame.size.height) > 0.5 else {
             return
@@ -119,6 +128,23 @@ extension NativeTextView {
         // Tell the container our height changed so it can re-stack (move us below the
         // header) and size itself. Re-entrancy is guarded inside the container.
         (superview as? NativeTextViewContainer)?.textViewDidResize()
+    }
+
+    /// Re-center the column by moving its X (not resizing it) so it stays smooth during live resize.
+    func centerReadingColumn(forClipWidth clipWidth: CGFloat) {
+        guard configuration.readingWidth != nil,
+              let container = superview as? NativeTextViewContainer else { return }
+        if abs(container.frame.size.width - clipWidth) > 0.5 {
+            var f = container.frame
+            f.size.width = max(clipWidth, 0)
+            container.frame = f
+        }
+        let originX = floor(max(0, (clipWidth - readingColumnWidth) / 2))
+        let delta = originX - frame.origin.x
+        if abs(delta) > 0.5 {
+            setFrameOrigin(NSPoint(x: originX, y: frame.origin.y))
+            repositionWideTableOverlaysForWidthChange(insetDelta: delta)
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -147,7 +173,9 @@ extension NativeTextView {
         if widthChanged {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.restyleWideTableParagraphsForWidthChange()
+                if self.configuration.readingWidth == nil {
+                    self.restyleWideTableParagraphsForWidthChange()
+                }
                 self.updateWideTableOverlays()
             }
         }
@@ -175,7 +203,41 @@ extension NativeTextView {
             suppressAutoRevealOnce = false
             return
         }
-        super.scrollRangeToVisible(range)
+        // Only the reading column needs manual reveal; default keeps AppKit's native implementation.
+        guard configuration.readingWidth != nil else {
+            super.scrollRangeToVisible(range)
+            return
+        }
+        // Explicit reveal: native scrollRangeToVisible can't position the container's centered subview.
+        guard let tlm = textLayoutManager,
+              let scrollView = enclosingScrollView,
+              let start = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: range.location) else {
+            super.scrollRangeToVisible(range)
+            return
+        }
+        tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let cv = scrollView.contentView
+            let insetsTop = scrollView.contentInsets.top
+            // Fragment frames are text-view-local; the scroll offset below is in
+            // document-view space, so lift them by the text view's offset inside the
+            // container (the header band).
+            let frame = fragment.layoutFragmentFrame.offsetBy(dx: 0, dy: self.frame.origin.y)
+            let visibleTop = cv.bounds.origin.y + insetsTop
+            let visibleBottom = cv.bounds.origin.y + cv.bounds.height
+            let margin: CGFloat = 24
+            let targetY: CGFloat
+            if frame.minY < visibleTop {
+                targetY = frame.minY - insetsTop - margin
+            } else if frame.maxY > visibleBottom {
+                targetY = frame.maxY - cv.bounds.height + margin
+            } else {
+                return false   // already visible
+            }
+            cv.scroll(to: NSPoint(x: cv.bounds.origin.x, y: targetY))
+            scrollView.reflectScrolledClipView(cv)
+            (scrollView as? ClampedScrollView)?.clampToInsets()
+            return false
+        }
     }
 
     /// Force TextKit 2 to lay out all fragments within the current visible rect.

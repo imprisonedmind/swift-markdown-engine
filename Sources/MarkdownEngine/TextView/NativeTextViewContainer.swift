@@ -2,15 +2,18 @@
 //  NativeTextViewContainer.swift
 //  MarkdownEngine
 //
-//  Document view of the editor's scroll view. Stacks the scroll-away header and the
-//  `NativeTextView` as SIBLINGS with disjoint frames, so body text can never composite
-//  over the header. The previous design hosted the header as a SUBVIEW of the text view
-//  (reserving space via a `textContainerOrigin` shift); during a responsive-scroll blit
-//  the cached body bitmap and the header's own `NSHostingView` layer advanced against
-//  slightly different origins, so the body drifted up over the collapsed tags row. No
-//  compositing fix could unify them (NSHostingView always forces its own layer), so the
-//  header is now a sibling: the body and header occupy disjoint rectangles in this
-//  container and overlap is geometrically impossible.
+//  Document view of the editor's scroll view. Hosts the `NativeTextView` plus two
+//  optional siblings: the scroll-away header (a top band, stacked ABOVE the text view
+//  with a disjoint frame) and, in reading-column mode, the full-width wide-table
+//  overlays around the centered fixed-width column.
+//
+//  The header is a sibling rather than a subview of the text view because a subview
+//  (reserving space via a `textContainerOrigin` shift) cannot be composited reliably:
+//  during a responsive-scroll blit the cached body bitmap and the header's own
+//  `NSHostingView` layer advance against slightly different origins, so the body
+//  drifts up over the header's lower rows. No compositing fix can unify them
+//  (NSHostingView always forces its own layer); with disjoint sibling frames the
+//  overlap is geometrically impossible.
 //
 
 import AppKit
@@ -55,11 +58,20 @@ final class NativeTextViewContainer: NSView {
         let w = bounds.width
         // Width propagation happens ONLY from the scroll-view-driven path; a height-only
         // restack must never resize the text view (that would re-measure → loop).
-        if propagateWidth, abs(textView.frame.width - w) > 0.5 {
-            textView.setFrameSize(NSSize(width: w, height: textView.frame.height))
+        if propagateWidth {
+            if textView.configuration.readingWidth != nil {
+                // Reading column: the column keeps its fixed width; re-center its X
+                // (and shift the wide-table overlay insets) instead of resizing.
+                textView.centerReadingColumn(forClipWidth: w)
+            } else if abs(textView.frame.width - w) > 0.5 {
+                textView.setFrameSize(NSSize(width: w, height: textView.frame.height))
+            }
         }
-        if abs(textView.frame.origin.y - headerHeight) > 0.01 || abs(textView.frame.origin.x) > 0.01 {
-            textView.setFrameOrigin(NSPoint(x: 0, y: headerHeight))
+        // Y: below the header band. X is owned by the reading-column centering
+        // (0 in full-width mode) — preserve it here.
+        let x = textView.configuration.readingWidth != nil ? textView.frame.origin.x : 0
+        if abs(textView.frame.origin.y - headerHeight) > 0.01 || abs(textView.frame.origin.x - x) > 0.01 {
+            textView.setFrameOrigin(NSPoint(x: x, y: headerHeight))
         }
         let viewportH = enclosingScrollView?.contentView.bounds.height ?? 0
         let totalH = max(headerHeight + textView.frame.height, viewportH)
@@ -78,5 +90,12 @@ final class NativeTextViewContainer: NSView {
         super.setFrameSize(newSize)
         // Width came from the scroll view's clip view (autoresizing); propagate it.
         restack(propagateWidth: true)
+    }
+}
+
+extension NSScrollView {
+    /// Editor text view inside the container document view.
+    var nativeTextView: NativeTextView? {
+        (documentView as? NativeTextViewContainer)?.textView
     }
 }
