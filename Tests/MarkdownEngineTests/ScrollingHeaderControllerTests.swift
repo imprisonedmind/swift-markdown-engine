@@ -54,6 +54,12 @@ struct ScrollingHeaderControllerTests {
         }
     }
 
+    /// Animated settles go through the clip-frame observer, which carries a
+    /// small deadband — compare with a matching tolerance, not exact equality.
+    private func nearly(_ value: CGFloat, _ target: CGFloat) -> Bool {
+        abs(value - target) <= 0.25
+    }
+
     @Test func buildReservesCollapsedHeightWhenCollapsed() {
         let stack = makeStack()
 
@@ -98,9 +104,9 @@ struct ScrollingHeaderControllerTests {
             header: fixedHeightHeader(90), collapsedHeight: 30, expanded: true,
             container: stack.container
         )
-        spinUntil(stack.container) { stack.container.headerHeight == 90 }
+        spinUntil(stack.container) { nearly(stack.container.headerHeight, 90) }
 
-        #expect(stack.container.headerHeight == 90)
+        #expect(nearly(stack.container.headerHeight, 90))
     }
 
     @Test func collapsedSteadyTracksCollapsedHeightChanges() {
@@ -135,9 +141,9 @@ struct ScrollingHeaderControllerTests {
             header: fixedHeightHeader(120), collapsedHeight: 30, expanded: true,
             container: stack.container
         )
-        spinUntil(stack.container) { stack.container.headerHeight == 120 }
+        spinUntil(stack.container) { nearly(stack.container.headerHeight, 120) }
 
-        #expect(stack.container.headerHeight == 120)
+        #expect(nearly(stack.container.headerHeight, 120))
         // After settling, the live-tracking equality constraint governs again.
         #expect(stack.controller.reservedHeight == 120)
     }
@@ -155,9 +161,9 @@ struct ScrollingHeaderControllerTests {
             header: fixedHeightHeader(120), collapsedHeight: 30, expanded: false,
             container: stack.container
         )
-        spinUntil(stack.container) { stack.container.headerHeight == 30 }
+        spinUntil(stack.container) { nearly(stack.container.headerHeight, 30) }
 
-        #expect(stack.container.headerHeight == 30)
+        #expect(nearly(stack.container.headerHeight, 30))
         #expect(stack.controller.reservedHeight == 30)
     }
 

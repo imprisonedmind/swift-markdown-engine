@@ -64,6 +64,11 @@ final class ScrollingHeaderController {
         if clipView == nil {
             build(header: header, collapsedHeight: collapsedHeight, expanded: expanded, container: container)
         } else if let hostingView {
+            // Refresh on every reconcile (every updateNSView, including keystrokes):
+            // the embedder's view may capture changing values, and SwiftUI's diff of
+            // an unchanged hierarchy is cheap — the same cost the header would pay
+            // rendered anywhere else in the embedder's tree. @State inside the
+            // header survives (same root structure diffs in place).
             hostingView.rootView = header
         }
         applyExpansion(collapsedHeight: collapsedHeight, expanded: expanded, container: container)
@@ -71,6 +76,8 @@ final class ScrollingHeaderController {
 
     func remove(from container: NativeTextViewContainer?) {
         animationToken += 1
+        settledToken = animationToken   // no animation in flight after teardown
+        animationTargetHeight = nil
         if let clipFrameObserver {
             NotificationCenter.default.removeObserver(clipFrameObserver)
             self.clipFrameObserver = nil
@@ -161,7 +168,7 @@ final class ScrollingHeaderController {
             MainActor.assumeIsolated {
                 guard let self, let container else { return }
                 let h = self.reservedHeight
-                guard abs(container.headerHeight - h) > 0.5 else { return }
+                guard abs(container.headerHeight - h) > 0.1 else { return }
                 container.headerHeight = h
             }
         }
@@ -197,11 +204,19 @@ final class ScrollingHeaderController {
                 target = collapsed
             }
             animate(to: target, expandedAfter: expanded, container: container)
-        } else if !expanded, constantC.isActive, animationToken == settledToken,
-                  abs(constantC.constant - collapsed) > 0.5 {
-            // Collapsed steady: keep the constant in sync with the collapsed height.
-            constantC.constant = collapsed
-            container.layoutSubtreeIfNeeded()
+        } else if !expanded, constantC.isActive {
+            if animationToken != settledToken {
+                // A collapse animation is in flight. If the collapsed height changed
+                // mid-flight (e.g. the pinned row re-measured), retarget — the new
+                // value arrives only on this reconcile and would otherwise be lost.
+                if let target = animationTargetHeight, abs(target - collapsed) > 0.5 {
+                    animate(to: collapsed, expandedAfter: false, container: container)
+                }
+            } else if abs(constantC.constant - collapsed) > 0.5 {
+                // Collapsed steady: keep the constant in sync with the collapsed height.
+                constantC.constant = collapsed
+                container.layoutSubtreeIfNeeded()
+            }
         }
         // Expanded steady: the equality constraint already tracks the content.
     }
@@ -209,15 +224,19 @@ final class ScrollingHeaderController {
     /// Tracks whether an animation is in flight: `animationToken` advances on every
     /// animation start and interruption; `settledToken` catches up on settle.
     private var settledToken = 0
+    /// Target of the in-flight animation, for mid-flight retargeting.
+    private var animationTargetHeight: CGFloat?
 
     private func animate(to target: CGFloat, expandedAfter: Bool, container: NativeTextViewContainer) {
         guard let constantC = constantConstraint else { return }
         animationToken += 1
         let token = animationToken
+        animationTargetHeight = target
 
         func settle() {
             guard token == animationToken else { return }   // interrupted by a newer toggle
             settledToken = token
+            animationTargetHeight = nil
             if expandedAfter, let equalityC = equalityConstraint, let constantC = constantConstraint {
                 // Hand back to the live-tracking equality constraint.
                 constantC.isActive = false
@@ -228,16 +247,13 @@ final class ScrollingHeaderController {
             (container.enclosingScrollView as? ClampedScrollView)?.clampToInsets()
         }
 
+        // ALWAYS go through the animator, even for a no-distance move: a direct
+        // property set would not cancel an animation already in flight on the
+        // constant, which would keep ticking toward its stale target underneath us.
         let start = constantC.constant
-        guard abs(target - start) > 0.5 else {
-            constantC.constant = target
-            container.layoutSubtreeIfNeeded()
-            settle()
-            return
-        }
-
+        let instant = abs(target - start) <= 0.5
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = animationDuration
+            context.duration = instant ? 0 : animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             // Animating the constraint's constant marks the container needing layout
             // each frame; the window's display cycle runs the layout pass, the clip's
@@ -246,5 +262,6 @@ final class ScrollingHeaderController {
         }, completionHandler: {
             MainActor.assumeIsolated { settle() }
         })
+        if instant { container.layoutSubtreeIfNeeded() }
     }
 }

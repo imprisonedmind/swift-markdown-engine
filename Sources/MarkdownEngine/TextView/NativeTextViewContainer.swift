@@ -28,11 +28,12 @@ final class NativeTextViewContainer: NSView {
     var headerHeight: CGFloat = 0 {
         didSet {
             guard abs(headerHeight - oldValue) > 0.01 else { return }
-            restack(propagateWidth: false)
             // The text view's viewport-fill inflation depends on the band height
-            // (header + text view ≥ viewport, not viewport + band). Re-apply it so a
-            // short doc never grows a phantom scroll range when the band changes.
+            // (header + text view ≥ viewport, not viewport + band). Re-apply it FIRST
+            // so the restack below sizes the container against the corrected height —
+            // a short doc never grows a phantom scroll range when the band changes.
             if let textView { textView.applyManagedFrameSize(width: textView.frame.width) }
+            restack(propagateWidth: false)
         }
     }
 
@@ -75,7 +76,11 @@ final class NativeTextViewContainer: NSView {
         // (0 in full-width mode) — preserve it here.
         let x = textView.configuration.readingWidth != nil ? textView.frame.origin.x : 0
         if abs(textView.frame.origin.y - headerHeight) > 0.01 || abs(textView.frame.origin.x - x) > 0.01 {
+            let deltaY = headerHeight - textView.frame.origin.y
             textView.setFrameOrigin(NSPoint(x: x, y: headerHeight))
+            // Breakout wide-table overlays are siblings whose frames bake in the
+            // text view's offset — keep them glued to their anchor paragraphs.
+            textView.shiftWideTableOverlays(byY: deltaY)
         }
         let viewportH = enclosingScrollView?.contentView.bounds.height ?? 0
         let totalH = max(headerHeight + textView.frame.height, viewportH)

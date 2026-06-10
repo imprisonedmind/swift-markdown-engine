@@ -62,6 +62,17 @@ struct NativeTextViewContainerTests {
 
         #expect(stack.textView.frame.height == 800)   // viewport-fill inflation
         #expect(stack.container.frame.height == 800)
+
+        // Exercise the container's OWN viewport floor: force the text view to an
+        // under-filling height (bypassing the managed inflation) — the container
+        // must still span the viewport so there's no dead band below the body.
+        stack.textView.isApplyingManagedFrameSize = true
+        stack.textView.setFrameSize(NSSize(width: 600, height: 100))
+        stack.textView.isApplyingManagedFrameSize = false
+        stack.container.textViewDidResize()
+
+        #expect(stack.textView.frame.height == 100)
+        #expect(stack.container.frame.height == 800)
     }
 
     @Test func scrollableContentHeightComposesHeaderAndContent() {

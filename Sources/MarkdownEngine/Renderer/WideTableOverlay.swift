@@ -182,6 +182,20 @@ extension NativeTextView {
         }
     }
 
+    /// Cheap per-frame overlay shift when the container moves the text view
+    /// vertically (header band growing/collapsing). Breakout overlays are
+    /// SIBLINGS in the container whose frames bake in the text view's offset
+    /// at update time; non-breakout overlays are text-view subviews and move
+    /// with it automatically.
+    func shiftWideTableOverlays(byY deltaY: CGFloat) {
+        guard configuration.readingWidth != nil, !wideTableOverlays.isEmpty else { return }
+        for (_, overlay) in wideTableOverlays {
+            var f = overlay.frame
+            f.origin.y += deltaY
+            overlay.frame = f
+        }
+    }
+
     /// Cheap per-frame overlay reposition on width change (no layout) — keeps tables glued to the text during resize.
     func repositionWideTableOverlaysForWidthChange(insetDelta: CGFloat) {
         guard configuration.readingWidth != nil, !wideTableOverlays.isEmpty else { return }

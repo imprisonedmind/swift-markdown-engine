@@ -251,6 +251,10 @@ NativeTextViewWrapper(
   (`.environmentObject`, `.environment`) into the view *before* wrapping
   it in `AnyView`; the hosting view does not inherit your hierarchy's
   environment.
+- The reserved band uses the view's **intrinsic** (ideal) height. Text
+  that relies on wrapping at the editor's width can render taller than
+  its ideal height and clip at the band's bottom — give wrapping
+  content an explicit height (`.frame`/`.fixedSize`) or line limit.
 - Composes with `readingWidth`: the header spans the full viewport
   width while the body keeps its centered column.
 - Pass `header: nil` (the default) and the editor renders exactly as
