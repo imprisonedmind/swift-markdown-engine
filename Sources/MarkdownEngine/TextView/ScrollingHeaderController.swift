@@ -92,6 +92,20 @@ final class ScrollingHeaderController {
         expanded: Bool,
         container: NativeTextViewContainer
     ) {
+        // Body compositing, gated on header presence so header-less editors keep
+        // AppKit's default rendering: the body is layer-backed (TextKit 2's default,
+        // asserted here for the seam fix), redrawn only on explicit invalidation, and
+        // clipped to its bounds so responsive-scroll OVERDRAW can't render text above
+        // the frame top into the header band. NSView does NOT clip by default; without
+        // this the body bleeds up over the collapsed header even though the frames
+        // are disjoint. Left in place if the header is later removed — un-clipping a
+        // live text view buys nothing and risks a repaint glitch.
+        if let textView = container.textView {
+            textView.wantsLayer = true
+            textView.layerContentsRedrawPolicy = .onSetNeedsDisplay
+            textView.clipsToBounds = true
+        }
+
         let host = NSHostingView(rootView: header)
         if #available(macOS 13.0, *) { host.sizingOptions = [.intrinsicContentSize] }
         // Ignore the window safe area (the toolbar/navbar region). Otherwise, as the

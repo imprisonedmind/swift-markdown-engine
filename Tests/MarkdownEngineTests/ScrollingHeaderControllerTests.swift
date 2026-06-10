@@ -161,6 +161,26 @@ struct ScrollingHeaderControllerTests {
         #expect(stack.controller.reservedHeight == 30)
     }
 
+    @Test func bodyClippingIsGatedOnHeaderPresence() {
+        let stack = makeStack()
+        // Header-less editors keep AppKit's defaults — no clipping or redraw-policy
+        // change for embedders that never pass a header. (TextKit 2 text views are
+        // layer-backed by default; that part was never a change.)
+        #expect(stack.textView.clipsToBounds == false)
+
+        stack.controller.reconcile(
+            header: fixedHeightHeader(120), collapsedHeight: 30, expanded: false,
+            container: stack.container
+        )
+
+        // With a header, the body must be layer-backed, clipped, and redrawn on
+        // explicit invalidation so responsive-scroll overdraw can't bleed into the
+        // band above it.
+        #expect(stack.textView.wantsLayer == true)
+        #expect(stack.textView.clipsToBounds == true)
+        #expect(stack.textView.layerContentsRedrawPolicy == .onSetNeedsDisplay)
+    }
+
     @Test func removeRestoresHeaderlessStacking() {
         let stack = makeStack()
         stack.controller.reconcile(

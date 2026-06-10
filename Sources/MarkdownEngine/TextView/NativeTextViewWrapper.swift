@@ -184,17 +184,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // Width and origin are driven by the container document view (see below).
         textView.autoresizingMask = []
         textView.backgroundColor = .clear
-        // Layer-back the text view for smooth scrolling. The scroll-away header is now
-        // a SIBLING of the text view inside the container (`NativeTextViewContainer`),
-        // not a subview, so no cross-layer unification with the header is needed — they
-        // occupy disjoint frames and cannot composite over each other.
-        textView.wantsLayer = true
-        textView.layerContentsRedrawPolicy = .onSetNeedsDisplay
-        // Clip the body to the text view's bounds so responsive-scroll OVERDRAW can't
-        // render text ABOVE the text view's frame top (into the header band that sits
-        // above it). NSView does NOT clip to bounds by default; without this the body
-        // bleeds up over the collapsed header even though the FRAMES are disjoint.
-        textView.clipsToBounds = true
+        // Body compositing for the scroll-away header (clipsToBounds + redraw policy)
+        // is applied by ScrollingHeaderController when a header is first supplied, so
+        // header-less embedders keep AppKit's default rendering.
         let font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
         textView.font = font
         textView.baseFont = font
