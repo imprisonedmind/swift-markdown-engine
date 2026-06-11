@@ -39,6 +39,10 @@ When we started building **[Nodes](https://apps.apple.com/de/app/nodes-by-the-we
   the renderer
 - **Code blocks** with embedder-supplied syntax highlighting and overlayable
   copy buttons
+- **Reading column** — opt-in fixed-width centered column, wide tables
+  break out to the full window width (`readingWidth`)
+- **Scroll-away header** — host your own SwiftUI view above the document;
+  it scrolls with the content and collapses to a pinned top row
 - **TextKit 2** layout for accurate, modern text rendering
 - **Writing Tools** integration on macOS 15.1+
 - **Comfortable bottom overscroll** so the caret never pins to the viewport
@@ -202,6 +206,7 @@ configuration.codeBlock.fontSizeScale = 0.9
 configuration.headings.fontMultipliers = [2.4, 1.8, 1.4, 1.1, 0.9, 0.75]
 configuration.overscroll.percent = 0.4
 configuration.lists.helpersEnabled = false
+configuration.safeAreaInsets = SafeAreaInsets(top: 56)   // headroom under a translucent toolbar
 ```
 
 ### Wiki-Links & Replacement State
@@ -223,6 +228,23 @@ NativeTextViewWrapper(
 - `pendingInlineReplacement` — assign a non-nil value to push a
   replacement (e.g. an autocomplete result); the engine consumes it
   and clears the binding.
+
+### Reading Column
+
+Give long documents a fixed-width, centered column — and let wide GFM
+tables break out of it to the full window width, Google-Docs-style:
+
+```swift
+var configuration = MarkdownEditorConfiguration.default
+configuration.readingWidth = 650
+```
+
+- Text wraps at `readingWidth` and never re-wraps on window resize —
+  only the column's position moves, which keeps live resize smooth.
+- Tables wider than the column expand up to the full viewport width and
+  scroll horizontally beyond that.
+- Leave it `nil` (the default) and the editor fills its container
+  edge-to-edge, exactly as before.
 
 ### Scrolling Header
 
@@ -257,6 +279,11 @@ NativeTextViewWrapper(
   content an explicit height (`.frame`/`.fixedSize`) or line limit.
 - Composes with `readingWidth`: the header spans the full viewport
   width while the body keeps its centered column.
+- An optional `placeholder: NSAttributedString?` renders ghost text at
+  the first-line position while the document is empty — below the header
+  band, tracking its reveal animation; the first keystroke hides it.
+  Style it with the editor's body font so it lines up with the would-be
+  first line.
 - Pass `header: nil` (the default) and the editor renders exactly as
   before — the header path adds nothing to header-less editors.
 
