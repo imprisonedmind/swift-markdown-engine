@@ -123,6 +123,10 @@ final class ScrollingHeaderController {
         if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
 
         let clip = NSView()
+        // Layer-back the clip so `clipsToBounds` reliably masks the layer-backed
+        // NSHostingView; without it the inspector body bleeds below the collapsed
+        // band on async resize (ghost rows + stale heading paints).
+        clip.wantsLayer = true
         clip.translatesAutoresizingMaskIntoConstraints = false
         clip.clipsToBounds = true
         clip.postsFrameChangedNotifications = true
