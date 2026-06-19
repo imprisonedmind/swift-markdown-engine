@@ -35,6 +35,12 @@ import AppKit
 ///     )
 /// }
 /// ```
+///
+/// In `.fitsContent` mode the editor grows/shrinks per keystroke, scroll-
+/// wheel events pass through to the enclosing scroller, and caret visibility
+/// propagates to the enclosing (page-level) scroll view. The reading column
+/// (`readingWidth`) composes naturally. See ``MarkdownEditorConfiguration/HeightBehavior``
+/// for the full behavior contract and trade-offs.
 public struct NativeTextViewWrapper: NSViewRepresentable {
     public typealias Coordinator = NativeTextViewCoordinator
     public typealias NSViewType = NSScrollView
@@ -178,8 +184,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         let scrollView = ClampedScrollView()
         scrollView.fitsContent = configuration.heightBehavior == .fitsContent
         scrollView.borderType = .noBorder
-        let disableScroller = configuration.heightBehavior == .fitsContent
-        scrollView.hasVerticalScroller = disableScroller ? false : configuration.scrollers.hasVerticalScroller
+        scrollView.hasVerticalScroller = configuration.heightBehavior.wantsVerticalScroller(for: configuration.scrollers)
         scrollView.hasHorizontalScroller = configuration.scrollers.hasHorizontalScroller
         scrollView.autohidesScrollers = configuration.scrollers.autohidesScrollers
         scrollView.drawsBackground = false
@@ -300,7 +305,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             if abs(newWidth - lastObservedViewportWidth) > 0.5 {
                 lastObservedViewportWidth = newWidth
                 // Re-center the column by position (no redraw) so it stays smooth during live resize.
-                if configuration.readingWidth != nil {
+                // Read readingWidth from the live textView.configuration (a class, captured by
+                // reference) instead of the struct `configuration` captured by value at
+                // makeNSView time — the embedder may change readingWidth between updates.
+                if textView.configuration.readingWidth != nil {
                     textView.centerReadingColumn(forClipWidth: newWidth)
                 }
                 context.coordinator.didEnsureLayoutForCurrentDocument = false
@@ -312,7 +320,12 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             // oscillation after clicks. Compare the CONTAINER (the document view) height
             // to the viewport — it tracks the viewport for short docs.
             guard let container = scrollView.documentView as? NativeTextViewContainer else { return }
-            if configuration.heightBehavior == .fitsContent {
+            // Read heightBehavior from the live textView.configuration (a class,
+            // captured by reference) — not the struct `configuration` captured by
+            // value at makeNSView time. Without this, a runtime .fitsContent→.scrolls
+            // switch leaves this closure permanently early-returning, so viewport-
+            // resize-driven recalcOverscroll is skipped → stale overscroll.
+            if textView.configuration.heightBehavior == .fitsContent {
                 // In .fitsContent the container is content-tall (not viewport-tall),
                 // so the container-vs-viewport guard below is always true — which
                 // would fire recalcOverscroll on every clip-view frame change. Only
@@ -369,6 +382,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.isWritingToolsActive = false
         } else if wtActive {
             // WT active on the same node — don't interfere with the session.
+            // Note: this skips the heightBehavior sync below, so a heightBehavior
+            // change while Writing Tools is active won't take effect until the
+            // session ends. WT sessions are transient and height-mode switches
+            // during one are not a supported use case.
             return
         }
 
@@ -382,8 +399,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         textView.configuration.heightBehavior = configuration.heightBehavior
         context.coordinator.configuration.heightBehavior = configuration.heightBehavior
-        let desiredVerticalScroller = configuration.heightBehavior == .fitsContent
-            ? false : configuration.scrollers.hasVerticalScroller
+        let desiredVerticalScroller = configuration.heightBehavior.wantsVerticalScroller(for: configuration.scrollers)
         if nsView.hasVerticalScroller != desiredVerticalScroller {
             nsView.hasVerticalScroller = desiredVerticalScroller
         }

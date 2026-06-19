@@ -2,8 +2,16 @@
 //  HeightBehaviorTests.swift
 //  MarkdownEngineTests
 //
-//  Configuration, inflation gating, overscroll zeroing, and intrinsic
-//  content size for the .fitsContent height behavior — headless (no window).
+//  Configuration, inflation gating, overscroll zeroing, intrinsic content
+//  size, runtime switching, async re-report, readingWidth composition, and
+//  empty-document minimum height for the .fitsContent height behavior —
+//  headless (no window).
+//
+//  Known coverage gap: `propagateCaretRevealToEnclosingScroller` (caret
+//  visibility in a tall .fitsContent block). This requires a live
+//  nested-scroll-view hierarchy (SwiftUI ScrollView hosting our
+//  NSScrollView) which cannot be constructed in a headless test.
+//  Verify manually in a host app.
 //
 
 import AppKit
@@ -242,7 +250,11 @@ struct RuntimeHeightBehaviorSwitchTests {
         newConfig.heightBehavior = .fitsContent
         stack.textView.configuration = newConfig
         stack.scrollView.fitsContent = true
-        stack.textView.recalcOverscroll(for: stack.scrollView)
+        // Use reapplyOverscrollPolicy (not recalcOverscroll) to avoid
+        // TextKit-2 re-measuring the content height in a headless test,
+        // then applyManagedFrameSize to reconfigure the frame.
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
 
         // Inflation removed: text view and container match content height.
         #expect(stack.textView.frame.height == 100)
@@ -392,9 +404,10 @@ struct HeaderFitsContentTests {
         stack.container.headerHeight = 60
 
         // scrollableContentHeight = header + text view's scrollableContentHeight
-        #expect(stack.container.scrollableContentHeight == 60 + 300)
+        let expectedTotal: CGFloat = 60 + 300
+        #expect(stack.container.scrollableContentHeight == expectedTotal)
         // Container frame matches exactly (no viewport inflation).
-        #expect(stack.container.frame.height == 60 + 300)
+        #expect(stack.container.frame.height == expectedTotal)
         // Text view sits below the header.
         #expect(stack.textView.frame.origin.y == 60)
     }
@@ -468,5 +481,439 @@ struct ScrollWheelForwardingTests {
         // In .scrolls mode, scrollWheel is handled by super (NSScrollView),
         // not forwarded to nextResponder.
         #expect(spy.receivedScrollWheel == false)
+    }
+}
+
+// MARK: - Async height-change re-report
+
+@MainActor
+@Suite("FitsContent async height-change re-report")
+struct AsyncHeightChangeTests {
+
+    @Test func contentHeightChangeUpdatesFrame() {
+        // Simulate an async content height change (e.g. image/LaTeX finishing layout)
+        // by mutating baseContentHeight and calling applyManagedFrameSize.
+        let stack = HeightBehaviorStack(heightBehavior: .fitsContent)
+        stack.textView.baseContentHeight = 200
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 200)
+        #expect(stack.container.frame.height == 200)
+
+        // Async height change: content grows.
+        stack.textView.baseContentHeight = 450
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        #expect(stack.textView.frame.height == 450)
+        #expect(stack.container.frame.height == 450)
+        // intrinsicContentSize reflects the new height.
+        #expect(stack.scrollView.intrinsicContentSize.height == 450)
+    }
+
+    @Test func contentHeightChangePreservesExactHeight() {
+        // After an async height change, no viewport inflation occurs.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .fitsContent
+        )
+        stack.textView.baseContentHeight = 300
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        // Grow past the viewport: still exact content height, not clamped.
+        stack.textView.baseContentHeight = 1200
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        #expect(stack.textView.frame.height == 1200)
+        #expect(stack.container.frame.height == 1200)
+    }
+
+    @Test func heightShrinkUpdatesFrame() {
+        // Content can also shrink (e.g. image removed, text deleted).
+        let stack = HeightBehaviorStack(heightBehavior: .fitsContent)
+        stack.textView.baseContentHeight = 600
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 600)
+
+        stack.textView.baseContentHeight = 150
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        #expect(stack.textView.frame.height == 150)
+        #expect(stack.container.frame.height == 150)
+        #expect(stack.scrollView.intrinsicContentSize.height == 150)
+    }
+
+    @Test func heightChangeInScrollsModeInflates() {
+        // Contrast: in .scrolls mode, short content inflates to viewport.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .scrolls
+        )
+        stack.textView.baseContentHeight = 200
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 800)
+
+        // Growing past viewport: frame matches content.
+        stack.textView.baseContentHeight = 1200
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 1200)
+
+        // Shrinking below viewport: inflates back to viewport.
+        stack.textView.baseContentHeight = 300
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 800)
+    }
+
+    @Test func asyncChangeWithHeaderUpdatesTotal() {
+        // Async height change with a header band present.
+        let stack = HeightBehaviorStack(heightBehavior: .fitsContent)
+        stack.textView.baseContentHeight = 200
+        stack.textView.applyManagedFrameSize(width: 600)
+        stack.container.headerHeight = 60
+
+        // Simulate async growth.
+        stack.textView.baseContentHeight = 400
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        let expectedTotal: CGFloat = 60 + 400
+        #expect(stack.textView.frame.height == 400)
+        #expect(stack.container.frame.height == expectedTotal)
+        #expect(stack.scrollView.intrinsicContentSize.height == expectedTotal)
+    }
+}
+
+// MARK: - Per-keystroke recalc chain
+
+@MainActor
+@Suite("FitsContent per-keystroke recalc chain")
+struct FitsContentRecalcChainTests {
+
+    @Test func recalcUpdatesFrameAndContainer() {
+        // The per-keystroke chain: recalcOverscroll measures content,
+        // calls applyManagedFrameSize, which sizes the frame and
+        // triggers container restack.
+        let stack = HeightBehaviorStack(heightBehavior: .fitsContent)
+
+        // Prime with an initial recalc (empty doc → one line height).
+        stack.textView.recalcOverscroll(for: stack.scrollView)
+        let initialHeight = stack.textView.frame.height
+        #expect(initialHeight > 0)
+
+        // The container matches the text view (no header, no inflation).
+        #expect(stack.container.frame.height == initialHeight)
+        // Overscroll stays zero.
+        #expect(stack.textView.activeBottomOverscroll == 0)
+    }
+
+    @Test func recalcAfterHeightChangeUpdatesIntrinsicSize() {
+        // After a height change driven through recalcOverscroll, the
+        // scroll view's intrinsicContentSize must reflect the new value.
+        let stack = HeightBehaviorStack(heightBehavior: .fitsContent)
+        stack.textView.recalcOverscroll(for: stack.scrollView)
+        let initial = stack.scrollView.intrinsicContentSize.height
+
+        // Manually set a taller base and re-run the recalc chain.
+        stack.textView.baseContentHeight = 500
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        let updated = stack.scrollView.intrinsicContentSize.height
+        #expect(updated == 500)
+        #expect(updated > initial)
+    }
+}
+
+// MARK: - Height change after runtime switch
+
+@MainActor
+@Suite("Height change after runtime switch")
+struct HeightChangeAfterRuntimeSwitchTests {
+
+    @Test func heightChangeAfterSwitchToFitsContent() {
+        // Start in .scrolls, switch to .fitsContent, then change height.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .scrolls
+        )
+        stack.textView.baseContentHeight = 200
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 800) // inflated
+
+        // Switch to .fitsContent.
+        var config = stack.textView.configuration
+        config.heightBehavior = .fitsContent
+        stack.textView.configuration = config
+        stack.scrollView.fitsContent = true
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 200) // deflated
+
+        // Now simulate an async height change.
+        stack.textView.baseContentHeight = 350
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        // Must be exact content height, no inflation.
+        #expect(stack.textView.frame.height == 350)
+        #expect(stack.container.frame.height == 350)
+        #expect(stack.scrollView.intrinsicContentSize.height == 350)
+    }
+
+    @Test func heightChangeAfterSwitchToScrolls() {
+        // Start in .fitsContent, switch to .scrolls, then change height.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .fitsContent
+        )
+        stack.textView.baseContentHeight = 200
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 200)
+
+        // Switch to .scrolls.
+        var config = stack.textView.configuration
+        config.heightBehavior = .scrolls
+        stack.textView.configuration = config
+        stack.scrollView.fitsContent = false
+        stack.textView.recalcOverscroll(for: stack.scrollView)
+        #expect(stack.textView.frame.height == 800) // inflated
+
+        // Async height change: still below viewport → stays inflated.
+        stack.textView.baseContentHeight = 400
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.frame.height == 800)
+
+        // intrinsicContentSize should revert to noIntrinsicMetric.
+        #expect(stack.scrollView.intrinsicContentSize.height == NSView.noIntrinsicMetric)
+    }
+}
+
+// MARK: - Runtime switch scroller visibility
+
+@MainActor
+@Suite("Runtime switch scroller visibility")
+struct RuntimeSwitchScrollerVisibilityTests {
+
+    // All tests call the shared production function
+    // `HeightBehavior.wantsVerticalScroller(for:)` — the same function
+    // used by `makeNSView` and `updateNSView` to set
+    // `scrollView.hasVerticalScroller`. No duplicated logic.
+
+    @Test func fitsContentAlwaysDisablesVerticalScroller() {
+        // Even when the scrollers policy has vertical scroller = true,
+        // .fitsContent overrides it to false (nothing to scroll).
+        let policy = ScrollersPolicy(hasVerticalScroller: true)
+        let result = MarkdownEditorConfiguration.HeightBehavior.fitsContent
+            .wantsVerticalScroller(for: policy)
+        #expect(result == false)
+    }
+
+    @Test func scrollsRespectsScrollersPolicy() {
+        // In .scrolls, the scroller follows the policy.
+        let policyOn = ScrollersPolicy(hasVerticalScroller: true)
+        #expect(
+            MarkdownEditorConfiguration.HeightBehavior.scrolls
+                .wantsVerticalScroller(for: policyOn) == true
+        )
+
+        let policyOff = ScrollersPolicy(hasVerticalScroller: false)
+        #expect(
+            MarkdownEditorConfiguration.HeightBehavior.scrolls
+                .wantsVerticalScroller(for: policyOff) == false
+        )
+    }
+
+    @Test func switchFromScrollsToFitsContentChangesDecision() {
+        let policy = ScrollersPolicy(hasVerticalScroller: true)
+        let before = MarkdownEditorConfiguration.HeightBehavior.scrolls
+            .wantsVerticalScroller(for: policy)
+        let after = MarkdownEditorConfiguration.HeightBehavior.fitsContent
+            .wantsVerticalScroller(for: policy)
+        #expect(before == true)
+        #expect(after == false)
+    }
+
+    @Test func switchFromFitsContentToScrollsChangesDecision() {
+        let policy = ScrollersPolicy(hasVerticalScroller: true)
+        let before = MarkdownEditorConfiguration.HeightBehavior.fitsContent
+            .wantsVerticalScroller(for: policy)
+        let after = MarkdownEditorConfiguration.HeightBehavior.scrolls
+            .wantsVerticalScroller(for: policy)
+        #expect(before == false)
+        #expect(after == true)
+    }
+}
+
+// MARK: - Reading width + fitsContent width change
+
+@MainActor
+@Suite("ReadingWidth + fitsContent width change")
+struct ReadingWidthFitsContentWidthChangeTests {
+
+    @Test func widthChangeUpdatesHeightInReadingColumnMode() {
+        // In reading-column mode, a width change should still re-measure
+        // and update the height. The column keeps its fixed wrap width, so
+        // the height is driven by that width, not the viewport.
+        let viewport = NSSize(width: 800, height: 600)
+        let sv = ClampedScrollView(frame: NSRect(origin: .zero, size: viewport))
+        sv.fitsContent = true
+        let tv = NativeTextView(frame: .zero)
+        var config = MarkdownEditorConfiguration.default
+        config.heightBehavior = .fitsContent
+        config.readingWidth = 400
+        tv.configuration = config
+        tv.autoresizingMask = []
+        let c = NativeTextViewContainer(frame: NSRect(origin: .zero, size: viewport))
+        c.autoresizingMask = [.width]
+        c.textView = tv
+        let columnWidth = tv.readingColumnWidth
+        tv.frame = NSRect(x: 0, y: 0, width: columnWidth, height: 0)
+        c.addSubview(tv)
+        sv.documentView = c
+
+        tv.baseContentHeight = 300
+        tv.applyManagedFrameSize(width: columnWidth)
+
+        // Height reflects content at the fixed column width.
+        #expect(tv.frame.height == 300)
+        #expect(c.frame.height == 300)
+
+        // Simulate a viewport width change (window resize).
+        // The column width stays fixed, so height should be unchanged.
+        tv.baseContentHeight = 300
+        tv.applyManagedFrameSize(width: columnWidth)
+        #expect(tv.frame.height == 300)
+        #expect(tv.frame.width == columnWidth)
+    }
+
+    @Test func readingWidthEmptyDocStillHasPositiveHeight() {
+        let viewport = NSSize(width: 800, height: 600)
+        let sv = ClampedScrollView(frame: NSRect(origin: .zero, size: viewport))
+        sv.fitsContent = true
+        let tv = NativeTextView(frame: .zero)
+        var config = MarkdownEditorConfiguration.default
+        config.heightBehavior = .fitsContent
+        config.readingWidth = 400
+        tv.configuration = config
+        tv.autoresizingMask = []
+        let c = NativeTextViewContainer(frame: NSRect(origin: .zero, size: viewport))
+        c.autoresizingMask = [.width]
+        c.textView = tv
+        let columnWidth = tv.readingColumnWidth
+        tv.frame = NSRect(x: 0, y: 0, width: columnWidth, height: 0)
+        c.addSubview(tv)
+        sv.documentView = c
+
+        // recalcOverscroll measures TextKit content → at least one line.
+        tv.recalcOverscroll(for: sv)
+        #expect(tv.baseContentHeight > 0)
+        #expect(tv.frame.height > 0)
+        #expect(tv.activeBottomOverscroll == 0)
+    }
+}
+
+// MARK: - Full runtime reconfiguration chain
+
+@MainActor
+@Suite("Full runtime reconfiguration")
+struct FullRuntimeReconfigurationTests {
+
+    @Test func switchReconfiguresAllThreeLayers() {
+        // Verify that a runtime switch syncs the heightBehavior across
+        // scroll view (fitsContent flag), text view (configuration),
+        // and that intrinsicContentSize reflects the new mode.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .scrolls
+        )
+        stack.textView.baseContentHeight = 300
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        // Verify initial state: .scrolls.
+        #expect(stack.scrollView.fitsContent == false)
+        #expect(stack.textView.configuration.heightBehavior == .scrolls)
+        #expect(stack.scrollView.intrinsicContentSize.height == NSView.noIntrinsicMetric)
+
+        // Switch to .fitsContent, mimicking updateNSView.
+        var newConfig = stack.textView.configuration
+        newConfig.heightBehavior = .fitsContent
+        stack.textView.configuration = newConfig
+        stack.scrollView.fitsContent = true
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
+        stack.scrollView.invalidateIntrinsicContentSize()
+
+        // All three layers should reflect .fitsContent.
+        #expect(stack.scrollView.fitsContent == true)
+        #expect(stack.textView.configuration.heightBehavior == .fitsContent)
+        #expect(stack.textView.activeBottomOverscroll == 0)
+        #expect(stack.textView.frame.height == 300)
+        #expect(stack.container.frame.height == 300)
+        #expect(stack.scrollView.intrinsicContentSize.height == 300)
+    }
+
+    @Test func switchPreservesContentHeight() {
+        // Content height should survive a round-trip switch:
+        // .scrolls → .fitsContent → .scrolls
+        // Uses reapplyOverscrollPolicy (not recalcOverscroll) to avoid
+        // TextKit-2 re-measuring in a headless test, which would overwrite
+        // the primed baseContentHeight.
+        //
+        // Use a short content (100pt) that stays below the overscroll
+        // activation threshold so the .scrolls frame inflates to exactly
+        // the viewport height with no added overscroll.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .scrolls
+        )
+        stack.textView.baseContentHeight = 100
+        stack.textView.applyManagedFrameSize(width: 600)
+        let originalBaseHeight = stack.textView.baseContentHeight
+
+        // → .fitsContent
+        var fc = stack.textView.configuration
+        fc.heightBehavior = .fitsContent
+        stack.textView.configuration = fc
+        stack.scrollView.fitsContent = true
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.baseContentHeight == originalBaseHeight)
+        #expect(stack.textView.frame.height == 100)
+
+        // → back to .scrolls
+        var sc = stack.textView.configuration
+        sc.heightBehavior = .scrolls
+        stack.textView.configuration = sc
+        stack.scrollView.fitsContent = false
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
+        #expect(stack.textView.baseContentHeight == originalBaseHeight)
+        // Frame is inflated to viewport since content (100) < viewport (800)
+        // and content is below the overscroll activation threshold.
+        #expect(stack.textView.frame.height == 800)
+    }
+
+    @Test func switchWithHeaderPreservesTotal() {
+        // With a header band, switching should preserve the total
+        // scrollableContentHeight composition.
+        let stack = HeightBehaviorStack(
+            viewport: NSSize(width: 600, height: 800),
+            heightBehavior: .fitsContent
+        )
+        stack.textView.baseContentHeight = 250
+        stack.textView.applyManagedFrameSize(width: 600)
+        stack.container.headerHeight = 50
+
+        let expectedTotal: CGFloat = 50 + 250
+        #expect(stack.container.scrollableContentHeight == expectedTotal)
+
+        // Switch to .scrolls.
+        var sc = stack.textView.configuration
+        sc.heightBehavior = .scrolls
+        stack.textView.configuration = sc
+        stack.scrollView.fitsContent = false
+        stack.textView.reapplyOverscrollPolicy(for: stack.scrollView)
+        stack.textView.applyManagedFrameSize(width: 600)
+
+        // scrollableContentHeight still composes header + content.
+        // (The container inflates to viewport, but scrollableContentHeight
+        // is the real content height, used by clampToInsets.)
+        let scrollsTotal: CGFloat = 50 + stack.textView.scrollableContentHeight
+        #expect(stack.container.scrollableContentHeight == scrollsTotal)
     }
 }

@@ -369,10 +369,9 @@ extension NativeTextView {
         var view: NSView? = innerScrollView.superview
         while let v = view {
             if let outerScrollView = v as? NSScrollView, outerScrollView !== innerScrollView {
-                let rectInOuter = outerScrollView.documentView?.convert(
-                    rectInWindow, from: nil
-                ) ?? rect
-                outerScrollView.documentView?.scrollToVisible(rectInOuter)
+                guard let outerDocView = outerScrollView.documentView else { return }
+                let rectInOuter = outerDocView.convert(rectInWindow, from: nil)
+                outerDocView.scrollToVisible(rectInOuter)
                 return
             }
             view = v.superview
