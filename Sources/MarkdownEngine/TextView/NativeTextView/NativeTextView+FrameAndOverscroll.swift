@@ -288,9 +288,13 @@ extension NativeTextView {
             return
         }
         // Explicit reveal: native scrollRangeToVisible can't position the container's centered subview.
+        // A caret at the document end has no fragment at its location; step back one
+        // char there so the last line's fragment is found (else nothing reveals).
+        let docLength = (self.string as NSString).length
+        let revealOffset = min(range.location, max(0, docLength - 1))
         guard let tlm = textLayoutManager,
               let scrollView = enclosingScrollView,
-              let start = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: range.location) else {
+              let start = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: revealOffset) else {
             super.scrollRangeToVisible(range)
             return
         }
