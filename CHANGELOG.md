@@ -5,14 +5,29 @@ All notable changes to swift-markdown-engine are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-06-20
+
+### Added
+- `MarkdownEditorConfiguration.heightBehavior` (`.scrolls` default / `.fitsContent`):
+  in `.fitsContent` the editor grows to its content height and reports it to
+  SwiftUI, so an enclosing `ScrollView` scrolls the page instead of a nested
+  internal scroller. Opt-in, off by default — no change for existing embedders. (#75)
+- `BlockquoteStyle` configuration struct with `extraLineHeight` to control line
+  spacing inside blockquotes, following the `ListStyle.extraLineHeight` /
+  `ParagraphStyle.lineHeightExtraSpacing` pattern. Defaults to `0` (no extra
+  spacing), preserving existing rendering. (#76)
+
+### Fixed
+- Mouse-wheel / trackball scrolling no longer clamps back at the bottom past a
+  stale-small content-height measurement. (#71)
+- Inspector clip mask and caret reveal at the document end. (#73)
+- Scroll position is remembered per document across switches, and Writing Tools
+  results stay styled and visible after accept. (#70)
+- Empty-file placeholder no longer clips to one line after a view rebuild. (#69)
+
 ## [Unreleased]
 
 ### Added
-- `BlockquoteStyle` configuration struct with `extraLineHeight` to
-  control line spacing inside blockquotes, following the existing
-  `ListStyle.extraLineHeight` and `ParagraphStyle.lineHeightExtraSpacing`
-  pattern. Defaults to `0` (no extra spacing), preserving existing
-  rendering for embedders that don't set it.
 - Scroll-away header: `NativeTextViewWrapper` gains `header: AnyView?`,
   `headerCollapsedHeight: CGFloat`, and `headerExpanded: Bool`. The engine
   hosts the supplied SwiftUI view above the document body, scrolling with
@@ -82,4 +97,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DocC documentation catalog with landing page and topic groups
 - Triple-slash documentation comments on the full public API surface
 
-[Unreleased]: https://github.com/nodes-app/swift-markdown-engine/compare/HEAD
+[Unreleased]: https://github.com/nodes-app/swift-markdown-engine/compare/0.7.1...HEAD
+[0.7.1]: https://github.com/nodes-app/swift-markdown-engine/compare/0.7.0...0.7.1
