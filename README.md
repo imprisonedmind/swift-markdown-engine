@@ -19,8 +19,7 @@
 </video>
 
 
-A native AppKit Markdown editor for macOS, built on TextKit 2 and bridged to
-SwiftUI. Powers **[Nodes](https://apps.apple.com/de/app/nodes-by-the-werk/id6745401961)**. Live styling, wiki-link support, fenced code blocks with syntax highlighting, LaTeX rendering, embedded images, and GitHub-style task
+A native AppKit Markdown editor for macOS, built on TextKit 2 and bridged to SwiftUI. Brought to you by **[Nodes](https://apps.apple.com/de/app/nodes-by-the-werk/id6745401961)**. Live styling, wiki-link support, fenced code blocks with syntax highlighting, LaTeX rendering, embedded images, and GitHub-style task
 checkboxes.
 
 ## Features
