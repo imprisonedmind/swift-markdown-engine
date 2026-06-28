@@ -5,7 +5,7 @@ All notable changes to swift-markdown-engine are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-06-28
 
 ### Added
 - `MarkdownEditorBus.findQuery` / `findResults`: query-based in-document find. The host posts a
@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `true`, `mouseMoved:` skips calling `super.mouseMoved` to avoid NSTextView's
   built-in I-beam cursor, setting the arrow cursor instead. Exposed through
   `NativeTextViewWrapper.isCursorExcluded`.
+- `NativeTextViewWrapper.onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)?` —
+  embedder hook to build the editor's right-click menu. The engine hands over the
+  default `NSMenu` + the current selection; the embedder returns the menu to show
+  (driving the `didMarkdown*` actions through the bus). Keeps the engine UI-free.
 - `==highlight==` inline markup: double-equals markers around text apply a
   background color (configurable via `MarkdownEditorTheme.highlightColor`,
   default `.systemOrange.withAlphaComponent(0.4)`). Content is recursively parsed so nested emphasis,
@@ -50,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Headless test suite for formatting actions (`FormattingActionTests`
   — 21 tests covering bold, strikethrough, inline code, blockquote,
   link, code block, horizontal rule, and image insertion).
+
+### Changed
+- The engine no longer ships a built-in right-click "Format" context menu — menus
+  are now embedder-supplied via `onBuildContextMenu` (above). The system rich-text
+  "Font" submenu (Bold/Italic/Show Colors…) is stripped from the default menu, since
+  those font traits don't apply to Markdown.
 
 ### Fixed
 - Blockquote removal no longer doubles trailing newlines when the
