@@ -27,6 +27,7 @@ enum MarkdownTokenKind {
     case codeBlock
     case inlineCode
     case blockLatex
+    case iframeEmbed
     case inlineLatex
     case imageEmbed
     case imageLink

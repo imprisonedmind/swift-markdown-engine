@@ -57,6 +57,18 @@ final class NativeTextViewContainer: NSView {
         headerHeight + (textView?.scrollableContentHeight ?? 0)
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let textView {
+            for overlay in textView.iframeEmbedOverlays.values where overlay.superview === self {
+                let overlayPoint = overlay.convert(point, from: self)
+                if let hitView = overlay.hitTest(overlayPoint) {
+                    return hitView
+                }
+            }
+        }
+        return super.hitTest(point)
+    }
+
     /// Single layout method. Moves the text view below the header (ORIGIN only — never
     /// `setFrameSize`, so the text view's self-measure isn't re-triggered) and sizes the
     /// container to `headerHeight + textViewHeight` (min the viewport). The header clip
@@ -87,6 +99,7 @@ final class NativeTextViewContainer: NSView {
             // Breakout wide-table overlays are siblings whose frames bake in the
             // text view's offset — keep them glued to their anchor paragraphs.
             textView.shiftWideTableOverlays(byY: deltaY)
+            textView.shiftIframeEmbedOverlays(byY: deltaY)
         }
         let viewportH = enclosingScrollView?.contentView.bounds.height ?? 0
         let stacked = headerHeight + textView.frame.height

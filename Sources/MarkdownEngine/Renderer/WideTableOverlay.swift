@@ -307,4 +307,123 @@ extension NativeTextView {
         for (_, overlay) in wideTableOverlays { overlay.removeFromSuperview() }
         wideTableOverlays.removeAll()
     }
+
+    func updateIframeEmbedOverlays() {
+        performIframeEmbedOverlayUpdate()
+    }
+
+    func shiftIframeEmbedOverlays(byY deltaY: CGFloat) {
+        guard configuration.readingWidth != nil, !iframeEmbedOverlays.isEmpty else { return }
+        for (_, overlay) in iframeEmbedOverlays {
+            var f = overlay.frame
+            f.origin.y += deltaY
+            overlay.frame = f
+        }
+    }
+
+    func repositionIframeEmbedOverlaysForWidthChange(insetDelta: CGFloat) {
+        guard configuration.readingWidth != nil, !iframeEmbedOverlays.isEmpty else { return }
+        let viewWidth = (superview ?? self).bounds.width
+        for (_, overlay) in iframeEmbedOverlays {
+            var f = overlay.frame
+            f.origin.x = 0
+            f.size.width = viewWidth
+            overlay.frame = f
+        }
+    }
+
+    func performIframeEmbedOverlayUpdate() {
+        guard let storage = textStorage,
+              let bridge = layoutBridge,
+              let container = bridge.firstTextContainer,
+              let tlm = textLayoutManager,
+              let tcs = tlm.textContentManager as? NSTextContentStorage else {
+            removeAllIframeEmbedOverlays()
+            return
+        }
+
+        let containerWidth = container.size.width
+        guard containerWidth.isFinite, containerWidth > 0 else { return }
+        let breakout = configuration.readingWidth != nil
+        let host: NSView = breakout ? (superview ?? self) : self
+        let viewWidth = host.bounds.width
+        let fullRange = NSRange(location: 0, length: storage.length)
+
+        var hasAnyIframe = false
+        storage.enumerateAttribute(.iframeEmbedID, in: fullRange, options: []) { value, _, stop in
+            if value is Int { hasAnyIframe = true; stop.pointee = true }
+        }
+        guard hasAnyIframe else {
+            if !iframeEmbedOverlays.isEmpty {
+                print("[MarkdownEngine][iframe] reconcile found no iframe attrs; removing \(iframeEmbedOverlays.count) overlay(s)")
+            } else {
+                print("[MarkdownEngine][iframe] reconcile found no iframe attrs")
+            }
+            removeAllIframeEmbedOverlays()
+            return
+        }
+
+        tlm.ensureLayout(for: tlm.documentRange)
+
+        var seenSourceIDs: Set<Int> = []
+        storage.enumerateAttribute(.iframeEmbedID, in: fullRange, options: []) { value, attrRange, _ in
+            guard let sourceID = value as? Int,
+                  let url = storage.attribute(.iframeEmbedURL, at: attrRange.location, effectiveRange: nil) as? URL else {
+                print("[MarkdownEngine][iframe] reconcile attr missing url range=\(attrRange.location):\(attrRange.length)")
+                return
+            }
+            seenSourceIDs.insert(sourceID)
+
+            if let start = tcs.location(tcs.documentRange.location, offsetBy: attrRange.location),
+               let end = tcs.location(start, offsetBy: attrRange.length),
+               let textRange = NSTextRange(location: start, end: end) {
+                tlm.ensureLayout(for: textRange)
+            }
+
+            let anchorRect = bridge.boundingRect(forCharacterRange: attrRange, in: container)
+            guard !anchorRect.isEmpty else {
+                print("[MarkdownEngine][iframe] reconcile empty anchor rect sourceID=\(sourceID) range=\(attrRange.location):\(attrRange.length)")
+                return
+            }
+
+            let displayHeight = (storage.attribute(.iframeEmbedHeight, at: attrRange.location, effectiveRange: nil) as? CGFloat) ?? 520
+            let totalHeight = (storage.attribute(.iframeEmbedTotalHeight, at: attrRange.location, effectiveRange: nil) as? CGFloat) ?? (displayHeight + IframeEmbedOverlay.headerHeight)
+            let requestedWidth = (storage.attribute(.iframeEmbedWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat) ?? containerWidth
+            let title = (storage.attribute(.iframeEmbedTitle, at: attrRange.location, effectiveRange: nil) as? String) ?? (url.host ?? url.absoluteString)
+            let columnLeft = (breakout ? frame.origin.x : 0) + textContainerOrigin.x + anchorRect.minX
+            let top = frame.origin.y + textContainerOrigin.y + anchorRect.minY
+            let overlayWidth = breakout ? min(max(240, requestedWidth), max(240, viewWidth - max(0, columnLeft))) : min(containerWidth, requestedWidth)
+            let overlayFrame: NSRect = breakout
+                ? NSRect(x: max(0, columnLeft), y: top, width: overlayWidth, height: totalHeight)
+                : NSRect(x: columnLeft, y: textContainerOrigin.y + anchorRect.minY, width: overlayWidth, height: totalHeight)
+            print("[MarkdownEngine][iframe] reconcile iframe sourceID=\(sourceID) url=\(url.absoluteString) attr=\(attrRange.location):\(attrRange.length) frame=\(Int(overlayFrame.origin.x)),\(Int(overlayFrame.origin.y)),\(Int(overlayFrame.width))x\(Int(overlayFrame.height))")
+
+            if let existing = iframeEmbedOverlays[sourceID] {
+                if !existing.frame.equalTo(overlayFrame) {
+                    host.setNeedsDisplay(existing.frame)
+                    existing.frame = overlayFrame
+                    host.setNeedsDisplay(overlayFrame)
+                }
+                existing.update(url: url, title: title, anchorLocation: attrRange.location)
+            } else {
+                let overlay = IframeEmbedOverlay(sourceID: sourceID, ownerTextView: self, anchorLocation: attrRange.location)
+                overlay.frame = overlayFrame
+                overlay.update(url: url, title: title, anchorLocation: attrRange.location)
+                host.addSubview(overlay, positioned: .above, relativeTo: nil)
+                iframeEmbedOverlays[sourceID] = overlay
+                print("[MarkdownEngine][iframe] created overlay sourceID=\(sourceID)")
+            }
+        }
+
+        for (sourceID, overlay) in iframeEmbedOverlays where !seenSourceIDs.contains(sourceID) {
+            host.setNeedsDisplay(overlay.frame)
+            overlay.removeFromSuperview()
+            iframeEmbedOverlays.removeValue(forKey: sourceID)
+        }
+    }
+
+    func removeAllIframeEmbedOverlays() {
+        for (_, overlay) in iframeEmbedOverlays { overlay.removeFromSuperview() }
+        iframeEmbedOverlays.removeAll()
+    }
 }

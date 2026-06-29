@@ -28,6 +28,9 @@ extension MarkdownStyler {
         let baseDefaultLineHeight: CGFloat
         let codeBackgroundColor: NSColor
         let latexMarkerFont: NSFont
+        let caretLocation: Int
+        let revealedIframeEmbedSourceIDs: Set<Int>
+        let revealedIframeEmbedParagraphLocations: Set<Int>
         let configuration: MarkdownEditorConfiguration
 
         var services: MarkdownEditorServices { configuration.services }
@@ -47,6 +50,8 @@ enum MarkdownStyler {
         layoutBridge: LayoutBridge? = nil,
         caretLocation: Int,
         activeTokenIndices: Set<Int>,
+        revealedIframeEmbedSourceIDs: Set<Int> = [],
+        revealedIframeEmbedParagraphLocations: Set<Int> = [],
         wikiLinkIDProvider: @escaping (NSRange) -> String? = { _ in nil },
         precomputedTokens: [MarkdownToken]? = nil,
         scopedRanges: [NSRange]? = nil,
@@ -73,6 +78,9 @@ enum MarkdownStyler {
             codeBackgroundColor: codeBackgroundColor,
             latexMarkerFont: NSFont(name: fontName, size: hiddenMarkerSize)
                 ?? NSFont.systemFont(ofSize: hiddenMarkerSize),
+            caretLocation: caretLocation,
+            revealedIframeEmbedSourceIDs: revealedIframeEmbedSourceIDs,
+            revealedIframeEmbedParagraphLocations: revealedIframeEmbedParagraphLocations,
             configuration: configuration
         )
 
@@ -88,6 +96,7 @@ enum MarkdownStyler {
         result += styleInlineLatex(ctx)
         result += styleImageEmbeds(ctx)
         result += styleImageLinks(ctx)
+        result += styleIframeEmbeds(ctx)
         result += styleTables(ctx)
         return result
     }
@@ -127,6 +136,7 @@ extension MarkdownStyler {
         paragraphSpacing: CGFloat,
         alignment: NSTextAlignment,
         mode: RenderedStandaloneBlockMode,
+        extraAnchorAttrs: [NSAttributedString.Key: Any] = [:],
         ctx: StylingContext,
         attrs: inout [StyledRange]
     ) -> Bool {
@@ -149,7 +159,7 @@ extension MarkdownStyler {
                 paraRange: paraRange,
                 advanceWidth: imageBounds.width,
                 neededLineHeight: imageBounds.height,
-                extraAnchorAttrs: [:],
+                extraAnchorAttrs: extraAnchorAttrs,
                 markerTexts: markerTexts,
                 ctx: ctx,
                 attrs: &attrs

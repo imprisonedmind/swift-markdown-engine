@@ -32,6 +32,7 @@ indirect enum BlockNode: Equatable {
     case list(range: NSRange, items: [ListItem])
     case codeBlock(range: NSRange)
     case blockLatex(range: NSRange)
+    case iframeEmbed(range: NSRange)
     case table(range: NSRange)
     case thematicBreak(range: NSRange)
     case blank(range: NSRange)
@@ -39,7 +40,7 @@ indirect enum BlockNode: Equatable {
     var range: NSRange {
         switch self {
         case .paragraph(let r, _), .heading(_, let r, _, _), .blockquote(let r, _),
-             .list(let r, _), .codeBlock(let r), .blockLatex(let r), .table(let r),
+             .list(let r, _), .codeBlock(let r), .blockLatex(let r), .iframeEmbed(let r), .table(let r),
              .thematicBreak(let r), .blank(let r):
             return r
         }
@@ -81,6 +82,8 @@ enum DocumentAST {
             return .codeBlock(range: block.range)
         case .blockLatex:
             return .blockLatex(range: block.range)
+        case .iframeEmbed:
+            return .iframeEmbed(range: block.range)
         case .table:
             return .table(range: block.range)
         case .thematicBreak:

@@ -237,6 +237,7 @@ extension NativeTextView {
         if abs(delta) > 0.5 {
             setFrameOrigin(NSPoint(x: originX, y: frame.origin.y))
             repositionWideTableOverlaysForWidthChange(insetDelta: delta)
+            repositionIframeEmbedOverlaysForWidthChange(insetDelta: delta)
         }
     }
 
@@ -270,6 +271,7 @@ extension NativeTextView {
                     self.restyleWideTableParagraphsForWidthChange()
                 }
                 self.updateWideTableOverlays()
+                self.updateIframeEmbedOverlays()
             }
         }
     }

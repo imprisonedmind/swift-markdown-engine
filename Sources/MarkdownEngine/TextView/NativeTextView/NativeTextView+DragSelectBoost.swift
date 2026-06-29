@@ -12,6 +12,24 @@ import AppKit
 
 extension NativeTextView {
     override func mouseDown(with event: NSEvent) {
+        if let iframeHitTarget = iframeEmbedHitTarget(for: event) {
+            if let iframeOverlay = iframeHitTarget as? IframeEmbedOverlay,
+               iframeOverlay.handleForwardedMouseDown(with: event) {
+                iframeInputLog("textView mouseDown forwarded to iframe overlay")
+                return
+            }
+            if iframeEmbedHasInteractionFocus {
+                iframeInputLog("textView mouseDown ignored inside iframe while iframe owns focus target=\(type(of: iframeHitTarget))")
+                return
+            }
+            iframeInputLog("textView mouseDown forwarding inside iframe target=\(type(of: iframeHitTarget))")
+            iframeHitTarget.mouseDown(with: event)
+            return
+        }
+        if iframeEmbedHasInteractionFocus {
+            iframeInputLog("textView mouseDown cleared iframe interaction focus")
+            iframeEmbedHasInteractionFocus = false
+        }
         if let toggled = toggleTaskCheckboxIfHit(event: event), toggled {
             return
         }
