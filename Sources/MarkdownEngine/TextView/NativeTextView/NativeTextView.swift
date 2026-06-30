@@ -60,6 +60,10 @@ final class NativeTextView: NSTextView {
     // MARK: Wide-table overlay state
     /// Live NSScrollView per wide table; keyed by source-ID hash.
     var wideTableOverlays: [Int: WideTableOverlay] = [:]
+    var iframeEmbedOverlays: [Int: IframeEmbedOverlay] = [:]
+    var iframeEmbedHasInteractionFocus = false
+    var revealedIframeEmbedSourceIDs = Set<Int>()
+    var revealedIframeEmbedParagraphLocations = Set<Int>()
     /// Persisted horizontal scroll offset per wide table; survives restyles.
     var tableHorizontalScrollOffsets: [Int: CGFloat] = [:]
 
@@ -69,6 +73,43 @@ final class NativeTextView: NSTextView {
         if let name = configuration.services.syntaxHighlighter.appearanceDidChangeNotification {
             NotificationCenter.default.post(name: name, object: self)
         }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        for overlay in iframeEmbedOverlays.values where overlay.superview === self {
+            let overlayPoint = overlay.convert(point, from: self)
+            if let hitView = overlay.hitTest(overlayPoint) {
+                return hitView
+            }
+        }
+        return super.hitTest(point)
+    }
+
+    func iframeEmbedHitTarget(for event: NSEvent) -> NSView? {
+        for overlay in iframeEmbedOverlays.values {
+            let overlayPoint = overlay.convert(event.locationInWindow, from: nil)
+            guard overlay.bounds.contains(overlayPoint) else { continue }
+            return overlay.hitTest(overlayPoint) ?? overlay
+        }
+        return nil
+    }
+
+    func clearRevealedIframeEmbedsOutsideCaret(in text: NSString, caretLocation: Int) -> [NSRange] {
+        guard !revealedIframeEmbedParagraphLocations.isEmpty else { return [] }
+        let safeCaret = min(max(caretLocation, 0), text.length)
+        let caretParagraph = text.paragraphRange(for: NSRange(location: safeCaret, length: 0))
+        var clearedParagraphs: [NSRange] = []
+
+        for paragraphLocation in revealedIframeEmbedParagraphLocations where paragraphLocation != caretParagraph.location {
+            let paragraph = text.paragraphRange(for: NSRange(location: min(paragraphLocation, max(0, text.length - 1)), length: 0))
+            clearedParagraphs.append(paragraph)
+        }
+
+        guard !clearedParagraphs.isEmpty else { return [] }
+        let remainingLocations = revealedIframeEmbedParagraphLocations.filter { $0 == caretParagraph.location }
+        revealedIframeEmbedParagraphLocations = remainingLocations
+        revealedIframeEmbedSourceIDs.removeAll()
+        return clearedParagraphs
     }
 
     // setMarkedText skips textDidChange, so restyle the marked paragraph to apply markdown attrs.

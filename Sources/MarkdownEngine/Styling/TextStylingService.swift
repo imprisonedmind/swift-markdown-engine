@@ -53,6 +53,8 @@ struct TextStylingService {
         paragraphStyle: NSMutableParagraphStyle,
         caretLocation: Int,
         activeTokenIndices: Set<Int>,
+        revealedIframeEmbedSourceIDs: Set<Int> = [],
+        revealedIframeEmbedParagraphLocations: Set<Int> = [],
         wikiLinkIDProvider: @escaping (NSRange) -> String?,
         precomputedTokens: [MarkdownToken]? = nil,
         configuration: MarkdownEditorConfiguration = .default
@@ -77,6 +79,8 @@ struct TextStylingService {
             layoutBridge: layoutBridge,
             caretLocation: caretLocation,
             activeTokenIndices: activeTokenIndices,
+            revealedIframeEmbedSourceIDs: revealedIframeEmbedSourceIDs,
+            revealedIframeEmbedParagraphLocations: revealedIframeEmbedParagraphLocations,
             wikiLinkIDProvider: wikiLinkIDProvider,
             precomputedTokens: precomputedTokens,
             scopedRanges: paragraphs,

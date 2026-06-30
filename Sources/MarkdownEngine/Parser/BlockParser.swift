@@ -30,6 +30,7 @@ enum BlockKind: Equatable {
     case list            // consecutive list-item lines (`-`/`*`/`+` or `1.`/`1)`)
     case fencedCode      // ```…``` — opaque (no inline parsing inside)
     case blockLatex      // $$…$$ — opaque
+    case iframeEmbed     // raw <iframe …></iframe> — opaque
     case table           // GFM table — opaque (rendered as a unit)
     case thematicBreak   // `---` / `***` / `___` — produces no token today
     case blank           // blank / whitespace-only line(s) — separator
@@ -93,6 +94,8 @@ enum BlockParser {
                 if i + 1 < end, buf[i + 1] == 0x24 { return true }       // $$
             } else if buf[i] == 0x60, i + 2 < end, buf[i + 1] == 0x60, buf[i + 2] == 0x60 {
                 return true                                              // ```
+            } else if buf[i] == 0x3A, i + 2 < end, buf[i + 1] == 0x3A, buf[i + 2] == 0x3A {
+                return true                                              // :::
             }
             i += 1
         }
@@ -116,7 +119,7 @@ enum BlockParser {
         let changeStart = p
         let changeEnd = oldLen - s              // [changeStart, changeEnd) in old
 
-        // A fence/block-LaTeX delimiter in the edit can pair with a distant partner → full reparse.
+        // A fence/block-LaTeX/iframe delimiter in the edit can pair with a distant partner → full reparse.
         if hasBlockDelimiter(o, changeStart, changeEnd) || hasBlockDelimiter(n, changeStart, newLen - s) {
             return nil
         }
@@ -130,7 +133,7 @@ enum BlockParser {
         let winLast = min(oldBlocks.count - 1, max(firstIdx, lastIdx) + 1)
 
         // 3. Bail on opaque multi-line blocks — fences / block LaTeX can ripple.
-        for b in oldBlocks[winFirst...winLast] where b.kind == .fencedCode || b.kind == .blockLatex {
+        for b in oldBlocks[winFirst...winLast] where b.kind == .fencedCode || b.kind == .blockLatex || b.kind == .iframeEmbed {
             return nil
         }
 
@@ -143,7 +146,7 @@ enum BlockParser {
         let windowText = newNS.substring(with: NSRange(location: winStart, length: winEndNew - winStart))
         let reparsed = computeBlocks(windowText).map { $0.shifted(by: winStart) }
         // A trailing fence/latex reaching the window end might continue past it.
-        if let last = reparsed.last, last.kind == .fencedCode || last.kind == .blockLatex,
+        if let last = reparsed.last, last.kind == .fencedCode || last.kind == .blockLatex || last.kind == .iframeEmbed,
            NSMaxRange(last.range) >= winEndNew {
             return nil
         }
@@ -247,6 +250,21 @@ enum BlockParser {
                 blocks.append(Block(kind: .blockLatex, range: union(lines[i...end])))
                 i = end + 1
 
+            } else if isIframeOpen(line) {
+                var end = i
+                if !isIframeClose(line) {
+                    var scan = i + 1
+                    while scan < lines.count {
+                        if isIframeClose(lineText(scan)) {
+                            end = scan
+                            break
+                        }
+                        scan += 1
+                    }
+                }
+                blocks.append(Block(kind: .iframeEmbed, range: union(lines[i...end])))
+                i = end + 1
+
             } else {
                 // Paragraph: merge consecutive plain (non-blank, non-special) lines.
                 var end = i
@@ -257,6 +275,7 @@ enum BlockParser {
                     // A table (row + separator) or a block-LaTeX run interrupts it.
                     if isTableRow(next), end + 2 < lines.count, isTableSeparator(lineText(end + 2)) { break }
                     if isBlockLatexOpen(next), blockLatexCloseIndex(from: end + 1) != nil { break }
+                    if isIframeOpen(next) { break }
                     end += 1
                 }
                 blocks.append(Block(kind: .paragraph, range: union(lines[i...end])))
@@ -342,6 +361,14 @@ enum BlockParser {
     /// A block-LaTeX opener: a line whose content starts with `$$`.
     private static func isBlockLatexOpen(_ line: String) -> Bool {
         line.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("$$")
+    }
+
+    private static func isIframeOpen(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("<iframe")
+    }
+
+    private static func isIframeClose(_ line: String) -> Bool {
+        line.range(of: "</iframe>", options: [.caseInsensitive]) != nil
     }
 
     private static func union(_ ranges: ArraySlice<NSRange>) -> NSRange {

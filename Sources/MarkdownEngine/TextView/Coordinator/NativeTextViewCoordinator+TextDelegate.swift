@@ -137,7 +137,7 @@ extension NativeTextViewCoordinator {
             effectiveParagraphCandidates = [NSRange(location: 0, length: fullText.length)]
         }
         // Always restyle paragraphs containing latex/imageEmbed tokens to avoid stale raw text.
-        let latexParagraphs = (latexTokens + blockLatexTokens + parsed.imageEmbedTokens).map { fullText.paragraphRange(for: $0.range) }
+        let latexParagraphs = (latexTokens + blockLatexTokens + parsed.imageEmbedTokens + parsed.iframeEmbedTokens).map { fullText.paragraphRange(for: $0.range) }
         effectiveParagraphCandidates.append(contentsOf: latexParagraphs)
         effectiveParagraphCandidates.append(contentsOf: tokenRestyleParagraphs(
             in: fullText,
@@ -175,6 +175,11 @@ extension NativeTextViewCoordinator {
             return
         }
         updateSelectionStates(tv)
+        if let nativeTextView = tv as? NativeTextView,
+           nativeTextView.iframeEmbedHasInteractionFocus {
+            iframeInputLog("selection change ignored while iframe owns focus selection=\(selRange.location):\(selRange.length) event=\(String(describing: currentEventType)) firstResponder=\(String(describing: tv.window?.firstResponder))")
+            return
+        }
         let selLoc = selRange.location
 
         let parsed = parsedDocument(for: tv.string)
@@ -206,8 +211,10 @@ extension NativeTextViewCoordinator {
             let prevPara = nsText.paragraphRange(for: NSRange(location: safePrev, length: 0))
             paragraphCandidates.append(prevPara)
         }
+        let iframeRevealClearedParagraphs = (tv as? NativeTextView)?.clearRevealedIframeEmbedsOutsideCaret(in: nsText, caretLocation: caretLoc) ?? []
+        paragraphCandidates.append(contentsOf: iframeRevealClearedParagraphs)
         // Also restyle paragraphs containing latex/imageEmbed tokens to refresh rendering.
-        let latexParagraphs = (latexTokens + blockLatexTokens + parsed.imageEmbedTokens).map { nsText.paragraphRange(for: $0.range) }
+        let latexParagraphs = (latexTokens + blockLatexTokens + parsed.imageEmbedTokens + parsed.iframeEmbedTokens).map { nsText.paragraphRange(for: $0.range) }
         paragraphCandidates.append(contentsOf: latexParagraphs)
         paragraphCandidates.append(contentsOf: tokenRestyleParagraphs(
             in: nsText,
@@ -218,6 +225,7 @@ extension NativeTextViewCoordinator {
 
         let shouldSkipSelectionRestyle = pendingEditedRange != nil
         let tokensChanged = activeTokenIndices != prevActive
+        let iframeRevealChanged = !iframeRevealClearedParagraphs.isEmpty
         // Caret crossings in/out of `- [ ]` syntax need a restyle too: task
         // checkboxes aren't tracked as tokens, so `tokensChanged` won't
         // notice them, but the styler suppresses the checkbox glyph while
@@ -254,12 +262,13 @@ extension NativeTextViewCoordinator {
             needsRestyleAfterDrag = false // textDidChange restyles this edit cycle.
         } else if isDragSelecting {
             needsRestyleAfterDrag = true
-        } else if tokensChanged || taskSyntaxChanged || hrLineChanged || bulletSyntaxChanged || needsRestyleAfterDrag {
+        } else if tokensChanged || iframeRevealChanged || taskSyntaxChanged || hrLineChanged || bulletSyntaxChanged || needsRestyleAfterDrag {
             needsRestyleAfterDrag = false
             restyleTextView(tv, paragraphCandidates: paragraphCandidates, tokens: tokens)
         }
 
-        // Auto-select content when clicking (mouse) into a rendered (previously inactive) latex or image embed
+        // Auto-select content when clicking (mouse) into a rendered (previously inactive) latex or image embed.
+        // Iframes have explicit overlay controls; clicking their chrome/body must not reveal or select raw HTML.
         if selRange.length == 0,
            let eventType = currentEventType,
            eventType == .leftMouseUp || eventType == .leftMouseDown {
@@ -395,6 +404,12 @@ extension NativeTextViewCoordinator {
     }
 
     public func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let url = link as? URL {
+            DispatchQueue.main.async {
+                self.onLinkClick?(url.absoluteString)
+            }
+            return true
+        }
         guard let target = WikiLinkService.resolveIdentifier(link: link, textView: textView, at: charIndex) else {
             return false
         }

@@ -47,8 +47,10 @@ extension NativeTextViewCoordinator {
         textView.textStorage?.setAttributes(baseAttrs, range: fullRange)
 
         let tokens = parsedDocument(for: displayText).tokens
-        // Hide caret from styling when read-only, else clicks reveal raw token syntax.
-        let caretLocation = textView.isEditable ? textView.selectedRange().location : -1
+        // Hide caret from styling when read-only or when focus is inside an
+        // embedded control. The text view's last selection can still sit inside
+        // hidden source while a WKWebView is first responder.
+        let caretLocation = stylingCaretLocation(for: textView)
         activeTokenIndices = MarkdownDetection.computeActiveTokenIndices(
             selectionRange: textView.selectedRange(),
             tokens: tokens,
@@ -63,6 +65,8 @@ extension NativeTextViewCoordinator {
             layoutBridge: layoutBridge,
             caretLocation: caretLocation,
             activeTokenIndices: activeTokenIndices,
+            revealedIframeEmbedSourceIDs: (textView as? NativeTextView)?.revealedIframeEmbedSourceIDs ?? [],
+            revealedIframeEmbedParagraphLocations: (textView as? NativeTextView)?.revealedIframeEmbedParagraphLocations ?? [],
             precomputedTokens: tokens,
             configuration: configuration
         )
@@ -90,6 +94,7 @@ extension NativeTextViewCoordinator {
         if let nativeTextView = textView as? NativeTextView {
             DispatchQueue.main.async { [weak nativeTextView] in
                 nativeTextView?.updateWideTableOverlays()
+                nativeTextView?.updateIframeEmbedOverlays()
             }
         }
     }
@@ -112,8 +117,10 @@ extension NativeTextViewCoordinator {
             paragraphCandidates: paragraphCandidates,
             baseFont: baseFont,
             paragraphStyle: paragraphStyle,
-            caretLocation: textView.isEditable ? textView.selectedRange().location : -1,
+            caretLocation: stylingCaretLocation(for: textView),
             activeTokenIndices: activeTokenIndices,
+            revealedIframeEmbedSourceIDs: (textView as? NativeTextView)?.revealedIframeEmbedSourceIDs ?? [],
+            revealedIframeEmbedParagraphLocations: (textView as? NativeTextView)?.revealedIframeEmbedParagraphLocations ?? [],
             wikiLinkIDProvider: { [weak self] range in
                 self?.wikiLinkID(for: range)
             },
@@ -124,6 +131,7 @@ extension NativeTextViewCoordinator {
         if let nativeTextView = textView as? NativeTextView {
             DispatchQueue.main.async { [weak nativeTextView] in
                 nativeTextView?.updateWideTableOverlays()
+                nativeTextView?.updateIframeEmbedOverlays()
             }
         }
     }
@@ -139,6 +147,7 @@ extension NativeTextViewCoordinator {
         var blockLatexTokens: [MarkdownToken] = []
         var wikiLinkTokens: [MarkdownToken] = []
         var imageEmbedTokens: [MarkdownToken] = []
+        var iframeEmbedTokens: [MarkdownToken] = []
 
         codeTokens.reserveCapacity(tokens.count / 2)
         latexTokens.reserveCapacity(tokens.count / 4)
@@ -157,6 +166,8 @@ extension NativeTextViewCoordinator {
                 wikiLinkTokens.append(token)
             case .imageEmbed:
                 imageEmbedTokens.append(token)
+            case .iframeEmbed:
+                iframeEmbedTokens.append(token)
             default:
                 break
             }
@@ -168,7 +179,8 @@ extension NativeTextViewCoordinator {
             latexTokens: latexTokens,
             blockLatexTokens: blockLatexTokens,
             wikiLinkTokens: wikiLinkTokens,
-            imageEmbedTokens: imageEmbedTokens
+            imageEmbedTokens: imageEmbedTokens,
+            iframeEmbedTokens: iframeEmbedTokens
         )
         cachedParsedText = text
         cachedParsedDocument = parsed
@@ -296,5 +308,24 @@ extension NativeTextViewCoordinator {
         }
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(clampedCaret)
+    }
+
+    func stylingCaretLocation(for textView: NSTextView) -> Int {
+        let firstResponder = textView.window?.firstResponder
+        var iframeOwnsFocus = (textView as? NativeTextView)?.iframeEmbedHasInteractionFocus == true
+        let textViewOwnsFocus = firstResponder === textView
+        if textViewOwnsFocus, let nativeTextView = textView as? NativeTextView, nativeTextView.iframeEmbedHasInteractionFocus {
+            iframeInputLog("styling caret iframe focus cleared because textView is firstResponder selection=\(textView.selectedRange().location):\(textView.selectedRange().length)")
+            nativeTextView.iframeEmbedHasInteractionFocus = false
+            iframeOwnsFocus = false
+        }
+        guard textView.isEditable,
+              textViewOwnsFocus,
+              !iframeOwnsFocus else {
+            iframeInputLog("styling caret suppressed editable=\(textView.isEditable) textViewOwnsFocus=\(textViewOwnsFocus) iframeOwnsFocus=\(iframeOwnsFocus) firstResponder=\(String(describing: firstResponder)) selection=\(textView.selectedRange().location):\(textView.selectedRange().length)")
+            return -1
+        }
+        iframeInputLog("styling caret active location=\(textView.selectedRange().location) firstResponder=\(String(describing: firstResponder))")
+        return textView.selectedRange().location
     }
 }

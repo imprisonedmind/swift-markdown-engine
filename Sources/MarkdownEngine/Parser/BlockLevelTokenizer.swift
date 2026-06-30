@@ -49,6 +49,7 @@ enum BlockLevelTokenizer {
         case .blockquote:  return blockquote(in: sub)
         case .table:       return table(in: sub)
         case .blockLatex:  return blockLatex(in: sub)
+        case .iframeEmbed: return iframeEmbed(in: sub)
         case .paragraph, .list, .thematicBreak, .blank:
             // Safety-net table scan; tables/block LaTeX are their own blocks now, inline `$$…$$` stays plain.
             return table(in: sub)
@@ -230,5 +231,30 @@ enum BlockLevelTokenizer {
             i += 1
         }
         return tokens
+    }
+
+    // MARK: - Iframe embed  <iframe …></iframe>
+
+    private static func iframeEmbed(in s: NSString) -> [MarkdownToken] {
+        let len = s.length
+        guard len > 0 else { return [] }
+        let source = s as String
+        let lower = source.lowercased() as NSString
+        let open = lower.range(of: "<iframe")
+        guard open.location != NSNotFound else {
+            return [MarkdownToken(kind: .iframeEmbed, range: NSRange(location: 0, length: len), contentRange: NSRange(location: 0, length: len), markerRanges: [])]
+        }
+        let close = lower.range(of: "</iframe>")
+        let closingMarker = close.location == NSNotFound
+            ? NSRange(location: NSMaxRange(open), length: 0)
+            : NSRange(location: close.location, length: close.length)
+        let contentStart = min(NSMaxRange(open), len)
+        let contentEnd = max(contentStart, close.location == NSNotFound ? len : close.location)
+        return [MarkdownToken(
+            kind: .iframeEmbed,
+            range: NSRange(location: 0, length: len),
+            contentRange: NSRange(location: contentStart, length: contentEnd - contentStart),
+            markerRanges: [open, closingMarker].filter { $0.length > 0 }
+        )]
     }
 }

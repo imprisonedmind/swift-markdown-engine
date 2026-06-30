@@ -32,6 +32,13 @@ extension NSAttributedString.Key {
     static let scrollableBlockTotalHeight = NSAttributedString.Key("ScrollableBlockTotalHeight")
     /// NSValue(range:) — full multi-line range of the wide-table source, used to scope width-change restyles.
     static let scrollableBlockFullRange = NSAttributedString.Key("ScrollableBlockFullRange")
+    static let iframeEmbedID = NSAttributedString.Key("IframeEmbedID")
+    static let iframeEmbedURL = NSAttributedString.Key("IframeEmbedURL")
+    static let iframeEmbedTitle = NSAttributedString.Key("IframeEmbedTitle")
+    static let iframeEmbedWidth = NSAttributedString.Key("IframeEmbedWidth")
+    static let iframeEmbedHeight = NSAttributedString.Key("IframeEmbedHeight")
+    static let iframeEmbedTotalHeight = NSAttributedString.Key("IframeEmbedTotalHeight")
+    static let iframeEmbedFullRange = NSAttributedString.Key("IframeEmbedFullRange")
 }
 
 final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
@@ -339,6 +346,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
                 return
             }
+            if ts.attribute(.iframeEmbedID, at: attrRange.location, effectiveRange: nil) != nil {
+                return
+            }
             let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
             let imageBounds = boundsVal?.rectValue ?? .zero
             let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
@@ -364,6 +374,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
             // Skip overlay-rendered blocks; WideTableOverlay owns the visual.
             if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
+                return
+            }
+            if ts.attribute(.iframeEmbedID, at: attrRange.location, effectiveRange: nil) != nil {
                 return
             }
 

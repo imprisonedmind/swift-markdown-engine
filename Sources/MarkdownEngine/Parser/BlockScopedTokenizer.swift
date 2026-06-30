@@ -75,7 +75,7 @@ extension MarkdownTokenizer {
         let delta = newLen - oldLen
         let changeStart = p, changeEndNew = newLen - s
 
-        // A fence/block-LaTeX delimiter can pair with a distant partner and ripple far → full tokenization.
+        // A fence/block-LaTeX/iframe delimiter can pair with a distant partner and ripple far → full tokenization.
         if BlockParser.hasBlockDelimiter(o, changeStart, oldLen - s)
             || BlockParser.hasBlockDelimiter(n, changeStart, changeEndNew) { return nil }
 
@@ -127,8 +127,8 @@ extension MarkdownTokenizer {
         blockTokenLock.unlock()
 
         let blockLevel = BlockLevelTokenizer.tokens(for: kind, in: sub as NSString)
-        // Fenced code is opaque — no inline markup inside it.
-        let inline = kind == .fencedCode
+        // Fenced code and iframe directives are opaque — no inline markup inside them.
+        let inline = kind == .fencedCode || kind == .iframeEmbed
             ? []
             : InlineASTAdapter.tokens(from: InlineParser.parse(sub))
         let computed = blockLevel + inline

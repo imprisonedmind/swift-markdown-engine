@@ -12,11 +12,19 @@ import AppKit
 extension NativeTextView {
 
     override func mouseMoved(with event: NSEvent) {
+        if iframeEmbedHitTarget(for: event) != nil {
+            NSCursor.arrow.set()
+            return
+        }
         super.mouseMoved(with: event)
         applyReadOnlyCursor(for: event)
     }
 
     override func mouseEntered(with event: NSEvent) {
+        if iframeEmbedHitTarget(for: event) != nil {
+            NSCursor.arrow.set()
+            return
+        }
         super.mouseEntered(with: event)
         applyReadOnlyCursor(for: event)
     }

@@ -126,6 +126,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         let blockLatexTokens: [MarkdownToken]
         let wikiLinkTokens: [MarkdownToken]
         let imageEmbedTokens: [MarkdownToken]
+        let iframeEmbedTokens: [MarkdownToken]
     }
 
     enum InlineTokenContext {
@@ -293,4 +294,3 @@ extension NSTextView {
         return boundingRect
     }
 }
-

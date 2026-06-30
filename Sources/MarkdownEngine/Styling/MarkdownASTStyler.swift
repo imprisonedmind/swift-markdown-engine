@@ -301,7 +301,7 @@ enum MarkdownASTStyler {
             styleCodeBlock(range: range, ctx: ctx, into: &attrs)
         case .thematicBreak(let range):
             styleThematicBreak(range: range, ctx: ctx, into: &attrs)
-        case .blockLatex, .table, .blank:
+        case .blockLatex, .iframeEmbed, .table, .blank:
             break   // NSImage rendering ported next
         }
     }
@@ -514,7 +514,7 @@ enum MarkdownASTStyler {
             case .list(_, let items):
                 // Phase A: shrink only inline markers; the list marker is hidden by the bullet/task pass.
                 for item in items { shrinkInlineMarkers(item.inlines, ctx: ctx, into: &attrs) }
-            case .codeBlock, .blockLatex, .table, .thematicBreak, .blank:
+            case .codeBlock, .blockLatex, .iframeEmbed, .table, .thematicBreak, .blank:
                 break
             }
         }
