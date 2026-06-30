@@ -238,6 +238,9 @@ extension NativeTextView {
             setFrameOrigin(NSPoint(x: originX, y: frame.origin.y))
             repositionWideTableOverlaysForWidthChange(insetDelta: delta)
             repositionIframeEmbedOverlaysForWidthChange(insetDelta: delta)
+            DispatchQueue.main.async { [weak self] in
+                self?.updateIframeEmbedOverlays()
+            }
         }
     }
 

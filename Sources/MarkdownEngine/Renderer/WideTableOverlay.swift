@@ -326,8 +326,8 @@ extension NativeTextView {
         let viewWidth = (superview ?? self).bounds.width
         for (_, overlay) in iframeEmbedOverlays {
             var f = overlay.frame
-            f.origin.x = 0
-            f.size.width = viewWidth
+            f.origin.x += insetDelta
+            f.size.width = min(f.size.width, max(240, viewWidth - max(0, f.origin.x)))
             overlay.frame = f
         }
     }
