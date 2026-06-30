@@ -61,7 +61,6 @@ extension MarkdownStyler {
             let displayWidth = min(max(requestedWidth, imageEmbedConfig.minimumWidth), maxWidth)
             let displayHeight = max(requestedHeight, 180)
             let totalHeight = IframeEmbedOverlay.headerHeight + displayHeight
-            iframeInputLog("style iframe render sourceID=\(sourceID) url=\(descriptor.url.absoluteString) caret=\(ctx.caretLocation) token=\(token.range.location):\(token.range.length) paragraph=\(paragraphRange.location):\(paragraphRange.length) size=\(Int(displayWidth))x\(Int(displayHeight))")
             let para = NSMutableParagraphStyle()
             para.minimumLineHeight = totalHeight
             para.maximumLineHeight = totalHeight
@@ -204,12 +203,34 @@ extension MarkdownStyler {
         return result
     }
 
-    private static func iframeSourceID(for token: MarkdownToken, in text: NSString) -> Int {
-        "\(token.range.location):\(text.substring(with: token.range))".hashValue
+    static func iframeSourceID(for token: MarkdownToken, in text: NSString) -> Int {
+        guard token.range.location != NSNotFound,
+              token.range.location >= 0,
+              NSMaxRange(token.range) <= text.length else {
+            return "\(token.range.location):\(token.range.length)".hashValue
+        }
+        let source = text.substring(with: token.range)
+        let occurrenceIndex = iframeOccurrenceIndex(forSource: source, before: token.range.location, in: text)
+        return "\(source)|\(occurrenceIndex)".hashValue
+    }
+
+    private static func iframeOccurrenceIndex(forSource source: String, before location: Int, in text: NSString) -> Int {
+        guard location > 0 else { return 0 }
+        let prefix = text.substring(with: NSRange(location: 0, length: min(location, text.length))) as NSString
+        var count = 0
+        var searchLocation = 0
+        while searchLocation < prefix.length {
+            let remaining = NSRange(location: searchLocation, length: prefix.length - searchLocation)
+            let found = prefix.range(of: source, options: [], range: remaining)
+            guard found.location != NSNotFound else { break }
+            count += 1
+            searchLocation = NSMaxRange(found)
+        }
+        return count
     }
 
 }
 
 private func iframeDebugLog(_ message: String) {
-    print("[MarkdownEngine][iframe] \(message)")
+    _ = message
 }

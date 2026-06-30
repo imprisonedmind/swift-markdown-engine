@@ -44,6 +44,13 @@ extension NativeTextViewCoordinator {
         ]
         textView.textStorage?.beginEditing()
         textView.textStorage?.removeAttribute(.link, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedID, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedURL, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedTitle, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedWidth, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedHeight, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedTotalHeight, range: fullRange)
+        textView.textStorage?.removeAttribute(.iframeEmbedFullRange, range: fullRange)
         textView.textStorage?.setAttributes(baseAttrs, range: fullRange)
 
         let tokens = parsedDocument(for: displayText).tokens
@@ -316,7 +323,7 @@ extension NativeTextViewCoordinator {
         let textViewOwnsFocus = firstResponder === textView
         if textViewOwnsFocus, let nativeTextView = textView as? NativeTextView, nativeTextView.iframeEmbedHasInteractionFocus {
             iframeInputLog("styling caret iframe focus cleared because textView is firstResponder selection=\(textView.selectedRange().location):\(textView.selectedRange().length)")
-            nativeTextView.iframeEmbedHasInteractionFocus = false
+            nativeTextView.setIframeEmbedInteractionFocus(false)
             iframeOwnsFocus = false
         }
         guard textView.isEditable,

@@ -68,6 +68,8 @@ final class NativeTextView: NSTextView {
     var wideTableOverlays: [Int: WideTableOverlay] = [:]
     var iframeEmbedOverlays: [Int: IframeEmbedOverlay] = [:]
     var iframeEmbedHasInteractionFocus = false
+    var iframeEmbedFocusMouseMonitor: Any?
+    var iframeEmbedIsRedirectingMouseDown = false
     var revealedIframeEmbedSourceIDs = Set<Int>()
     var revealedIframeEmbedParagraphLocations = Set<Int>()
     /// Persisted horizontal scroll offset per wide table; survives restyles.
@@ -100,6 +102,55 @@ final class NativeTextView: NSTextView {
         return nil
     }
 
+    func setIframeEmbedInteractionFocus(_ hasFocus: Bool) {
+        guard iframeEmbedHasInteractionFocus != hasFocus else {
+            if hasFocus {
+                installIframeEmbedFocusMouseMonitorIfNeeded()
+            }
+            return
+        }
+        iframeEmbedHasInteractionFocus = hasFocus
+        if hasFocus {
+            installIframeEmbedFocusMouseMonitorIfNeeded()
+        } else {
+            removeIframeEmbedFocusMouseMonitor()
+        }
+    }
+
+    private func installIframeEmbedFocusMouseMonitorIfNeeded() {
+        guard iframeEmbedFocusMouseMonitor == nil else { return }
+        iframeEmbedFocusMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            guard let self,
+                  self.iframeEmbedHasInteractionFocus,
+                  event.window === self.window else {
+                return event
+            }
+            if self.iframeEmbedHitTarget(for: event) == nil {
+                let point = event.locationInWindow
+                iframeInputLog("iframe focus monitor clearing outside click point=\(Int(point.x)),\(Int(point.y))")
+                self.setIframeEmbedInteractionFocus(false)
+                if self.isEditorWindowPoint(point) {
+                    self.window?.makeFirstResponder(self)
+                }
+            }
+            return event
+        }
+    }
+
+    private func isEditorWindowPoint(_ point: NSPoint) -> Bool {
+        if bounds.contains(convert(point, from: nil)) {
+            return true
+        }
+        guard let superview else { return false }
+        return superview.bounds.contains(superview.convert(point, from: nil))
+    }
+
+    private func removeIframeEmbedFocusMouseMonitor() {
+        guard let monitor = iframeEmbedFocusMouseMonitor else { return }
+        NSEvent.removeMonitor(monitor)
+        iframeEmbedFocusMouseMonitor = nil
+    }
+
     func clearRevealedIframeEmbedsOutsideCaret(in text: NSString, caretLocation: Int) -> [NSRange] {
         guard !revealedIframeEmbedParagraphLocations.isEmpty else { return [] }
         let safeCaret = min(max(caretLocation, 0), text.length)
@@ -130,5 +181,8 @@ final class NativeTextView: NSTextView {
         coord.restyleParagraphs([paragraph], in: self)
     }
 
-    deinit { caretIndicatorObservation?.invalidate() }
+    deinit {
+        caretIndicatorObservation?.invalidate()
+        removeIframeEmbedFocusMouseMonitor()
+    }
 }

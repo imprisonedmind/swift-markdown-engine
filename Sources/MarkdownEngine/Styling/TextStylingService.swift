@@ -107,6 +107,13 @@ struct TextStylingService {
                 .paragraphStyle: paragraphStyle
             ], range: paragraph)
             textView.textStorage?.removeAttribute(.link, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedID, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedURL, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedTitle, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedWidth, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedHeight, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedTotalHeight, range: paragraph)
+            textView.textStorage?.removeAttribute(.iframeEmbedFullRange, range: paragraph)
             for (range, attrs) in styledRanges where NSIntersectionRange(range, paragraph).length > 0 {
                 let clippedRange = NSIntersectionRange(range, paragraph)
                 for (key, value) in attrs {
