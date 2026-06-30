@@ -22,6 +22,16 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     /// Remembered scroll offset (`bounds.origin.y`) per `documentId` — saved on
     /// switch-away, restored on switch-back.
     var scrollOffsets: [String: CGFloat] = [:]
+    /// Per-`documentId` undo manager. AppKit reuses a single `NSTextView` across
+    /// all open documents, so its built-in (view-wide) undo manager would mix
+    /// files together. Keying a manager on the current document gives each file
+    /// its own undo stack that survives switching away and back. Vended through
+    /// the `undoManager(for:)` delegate method; pruned alongside `scrollOffsets`.
+    var undoManagers: [String: UndoManager] = [:]
+    /// Per-`documentId` content snapshot (storage form) taken on switch-away. On
+    /// switch-back a mismatch means the file was rewritten while backgrounded, so
+    /// the now-stale undo stack is dropped. Pruned alongside `undoManagers`.
+    var undoContentSnapshots: [String: String] = [:]
     @Binding var text: String
     @Binding var isWikiLinkActive: Bool
     var fontName: String
@@ -50,6 +60,9 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var layoutDelegate: MarkdownLayoutManagerDelegate?
     var onLinkClick: ((String) -> Void)?
     var onCaretRectChange: ((CGRect) -> Void)?
+    /// Embedder hook to build the right-click menu (the engine ships none). Gets the
+    /// default menu + current selection range, returns the menu to show.
+    var onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)?
     var onInlineSelectionChange: ((InlineSelectionState?) -> Void)?
     var onCodeBlockSelectionChange: (([CodeBlockSelection]) -> Void)?
     var didInitialFormatting: Bool = false
@@ -217,6 +230,56 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
                 self?.handleHeadingNotification(notification)
             })
         }
+        if let name = bus.applyHighlightRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleHighlightNotification(notification)
+            })
+        }
+        if let name = bus.applyStrikethroughRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleStrikethroughNotification(notification)
+            })
+        }
+        if let name = bus.applyInlineCodeRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleInlineCodeNotification(notification)
+            })
+        }
+        if let name = bus.applyBlockquoteRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleBlockquoteNotification(notification)
+            })
+        }
+        if let name = bus.applyUnorderedListRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleUnorderedListNotification(notification)
+            })
+        }
+        if let name = bus.applyOrderedListRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleOrderedListNotification(notification)
+            })
+        }
+        if let name = bus.applyLinkRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleLinkNotification(notification)
+            })
+        }
+        if let name = bus.applyCodeBlockRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleCodeBlockNotification(notification)
+            })
+        }
+        if let name = bus.applyHorizontalRuleRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleHorizontalRuleNotification(notification)
+            })
+        }
+        if let name = bus.applyImageRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleImageNotification(notification)
+            })
+        }
         if let name = bus.findScrollToRange {
             busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 self?.handleFindScrollToRange(notification)
@@ -225,6 +288,11 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         if let name = bus.findClearHighlights {
             busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 self?.handleFindClearHighlights(notification)
+            })
+        }
+        if let name = bus.findQuery {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.handleFindQuery(notification)
             })
         }
     }

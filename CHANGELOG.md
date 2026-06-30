@@ -5,6 +5,66 @@ All notable changes to swift-markdown-engine are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-28
+
+### Added
+- `MarkdownEditorBus.findQuery` / `findResults`: query-based in-document find. The host posts a
+  search string (+ current index) and the engine matches against its OWN displayed text,
+  highlighting in display coordinates and posting the match count back. This is correct where the
+  displayed text differs from the source — e.g. node links rendered shorter than `[[Name|UUID]]`,
+  LaTeX, or images — which the legacy `findScrollToRange` (host-computed source-coordinate ranges)
+  highlighted at the wrong offset. Opt-in; `findScrollToRange` is unchanged for existing embedders.
+- `NativeTextView.isCursorExcluded: ((CGPoint) -> Bool)?` — embedder-supplied
+  predicate that suppresses the edit-mode I-beam cursor when the mouse is inside
+  a defined exclusion zone (e.g. a formatting toolbar). When the closure returns
+  `true`, `mouseMoved:` skips calling `super.mouseMoved` to avoid NSTextView's
+  built-in I-beam cursor, setting the arrow cursor instead. Exposed through
+  `NativeTextViewWrapper.isCursorExcluded`.
+- `NativeTextViewWrapper.onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)?` —
+  embedder hook to build the editor's right-click menu. The engine hands over the
+  default `NSMenu` + the current selection; the embedder returns the menu to show
+  (driving the `didMarkdown*` actions through the bus). Keeps the engine UI-free.
+- `==highlight==` inline markup: double-equals markers around text apply a
+  background color (configurable via `MarkdownEditorTheme.highlightColor`,
+  default `.systemOrange.withAlphaComponent(0.4)`). Content is recursively parsed so nested emphasis,
+  code, etc. work inside highlights.
+- `MarkdownEditorBus.applyHighlightRequest` /
+  `selectionHighlightDidChange`: bus notification names for driving a
+  highlight toolbar button from host UI.
+- `MarkdownEditorBus` extended with nine new notification types for
+  formatting toolbar integration: `applyStrikethroughRequest`,
+  `applyInlineCodeRequest`, `applyBlockquoteRequest`,
+  `applyUnorderedListRequest`, `applyOrderedListRequest`,
+  `applyLinkRequest`, `applyCodeBlockRequest`,
+  `applyHorizontalRuleRequest`, `applyImageRequest`. Embedders wire
+  these into `NotificationCenter` to trigger formatting from
+  external UI (toolbars, menus) without reaching into the editor's
+  view hierarchy.
+- New formatting actions on the coordinator (callable directly or
+  via the bus above): `didMarkdownStrikethrough`, `didMarkdownInlineCode`,
+  `didMarkdownBlockquote`, `didMarkdownLink`, `didMarkdownCodeBlock`,
+  `didMarkdownHorizontalRule`, `didMarkdownImage`.
+- Word-boundary detection in inline formatting: when the cursor is
+  placed inside an English word with no active text selection, bold,
+  italic, strikethrough, and inline-code actions now auto-select the
+  containing word before wrapping. If no word character is adjacent
+  to the cursor, empty markers are inserted as before. The cursor's
+  relative offset within the word is preserved after wrapping
+  (e.g. `wo|rd` → `**wo|rd**`).
+- Headless test suite for formatting actions (`FormattingActionTests`
+  — 21 tests covering bold, strikethrough, inline code, blockquote,
+  link, code block, horizontal rule, and image insertion).
+
+### Changed
+- The engine no longer ships a built-in right-click "Format" context menu — menus
+  are now embedder-supplied via `onBuildContextMenu` (above). The system rich-text
+  "Font" submenu (Bold/Italic/Show Colors…) is stripped from the default menu, since
+  those font traits don't apply to Markdown.
+
+### Fixed
+- Blockquote removal no longer doubles trailing newlines when the
+  original line already carries one.
+
 ## [0.7.1] - 2026-06-20
 
 ### Added
@@ -24,8 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scroll position is remembered per document across switches, and Writing Tools
   results stay styled and visible after accept. (#70)
 - Empty-file placeholder no longer clips to one line after a view rebuild. (#69)
-
-## [Unreleased]
 
 ### Added
 - Scroll-away header: `NativeTextViewWrapper` gains `header: AnyView?`,
@@ -67,6 +125,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checking is enabled.
 
 ### Fixed
+- Undo is now kept per `documentId`, so Cmd+Z keeps working after switching
+  files. The single reused `NSTextView` previously wiped its undo manager on
+  every document switch; the editor now vends a per-document `UndoManager`
+  (via the new `undoManager(for:)` delegate method) whose undo/redo stack
+  survives switching away and back. (#77)
+- A document's surviving undo stack is dropped when its text is reloaded
+  *changed* while it was switched away (e.g. renaming a node rewrites the
+  `[[label]]` in every file that links it), so Cmd+Z can no longer replay
+  stale ranges against the rewritten content. (#78)
 - `NativeTextViewWrapper` keeps links clickable and text selectable
   when `isEditable: false`; `isSelectable` is no longer coupled to
   `isEditable`. (#31)

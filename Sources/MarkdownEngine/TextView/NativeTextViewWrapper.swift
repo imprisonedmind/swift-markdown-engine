@@ -64,10 +64,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// Base font size in points. Headings, code blocks, and LaTeX are scaled
     /// off this value via ``MarkdownEditorConfiguration``.
     public var fontSize: CGFloat
-    /// Opaque document identifier. Changing this invalidates undo history
-    /// and resets per-document editor state. Set a stable, unique value
-    /// per document when displaying multiple editors so pending
-    /// replacements and undo stay scoped to each editor.
+    /// Opaque document identifier. Each value keeps its own undo stack and
+    /// per-document editor state across switching away and back; the undo stack is
+    /// dropped only if the document's text changes while it is switched away. Set a
+    /// stable, unique value per document so undo/replacements stay scoped.
     public var documentId: String
     /// When `false` the editor renders read-only with no caret.
     public var isEditable: Bool
@@ -83,6 +83,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// Fires whenever the caret rect inside an active wiki-link changes,
     /// so embedders can position a follow-the-caret UI.
     public var onCaretRectChange: ((CGRect) -> Void)?
+    /// Build the editor's right-click menu (the engine ships no menu). Receives the default
+    /// NSMenu + the current selection range; return the menu to display (or unchanged).
+    public var onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)?
     /// Fires when the caret enters or leaves a `[[Name]]` or `![[…]]`
     /// token. `nil` means the caret is no longer inside such a token.
     public var onInlineSelectionChange: ((InlineSelectionState?) -> Void)?
@@ -117,6 +120,11 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// documentIds whose scroll offset to keep; others are forgotten. `nil` keeps all.
     public var retainedScrollDocumentIds: Set<String>?
 
+    /// Embedder-supplied predicate that suppresses the I-beam cursor in edit mode.
+    /// Called on mouse-move with the event location in window coordinates.
+    /// Return `true` to show the arrow cursor instead of the I-beam.
+    public var isCursorExcluded: ((CGPoint) -> Bool)?
+
     public init(
         text: Binding<String>,
         isWikiLinkActive: Binding<Bool> = .constant(false),
@@ -129,6 +137,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         onPasteImage: ((NSPasteboard) -> String?)? = nil,
         onLinkClick: ((String) -> Void)? = nil,
         onCaretRectChange: ((CGRect) -> Void)? = nil,
+        onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)? = nil,
         onInlineSelectionChange: ((InlineSelectionState?) -> Void)? = nil,
         onCodeBlockSelectionChange: (([CodeBlockSelection]) -> Void)? = nil,
         onSpellCheckingPolicyChanged: ((SpellCheckingPolicy) -> Void)? = nil,
@@ -136,7 +145,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         header: AnyView? = nil,
         headerCollapsedHeight: CGFloat = 0,
         headerExpanded: Bool = true,
-        retainedScrollDocumentIds: Set<String>? = nil
+        retainedScrollDocumentIds: Set<String>? = nil,
+        isCursorExcluded: ((CGPoint) -> Bool)? = nil
     ) {
         self._text = text
         self._isWikiLinkActive = isWikiLinkActive
@@ -149,6 +159,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.onPasteImage = onPasteImage
         self.onLinkClick = onLinkClick
         self.onCaretRectChange = onCaretRectChange
+        self.onBuildContextMenu = onBuildContextMenu
         self.onInlineSelectionChange = onInlineSelectionChange
         self.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         self.onSpellCheckingPolicyChanged = onSpellCheckingPolicyChanged
@@ -157,6 +168,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.headerCollapsedHeight = headerCollapsedHeight
         self.headerExpanded = headerExpanded
         self.retainedScrollDocumentIds = retainedScrollDocumentIds
+        self.isCursorExcluded = isCursorExcluded
     }
 
     public func sizeThatFits(
@@ -246,6 +258,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.font = font
         textView.baseFont = font
         textView.allowsUndo = true
+        textView.isCursorExcluded = isCursorExcluded
         textView.isAutomaticSpellingCorrectionEnabled = configuration.spellChecking.automaticSpellingCorrection
         textView.isContinuousSpellCheckingEnabled = configuration.spellChecking.continuousSpellChecking
         textView.isGrammarCheckingEnabled = configuration.spellChecking.grammarChecking
@@ -288,6 +301,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.wikiLinkMetadata = initialState.metadata
         context.coordinator.onCaretRectChange = onCaretRectChange
+        context.coordinator.onBuildContextMenu = onBuildContextMenu
         context.coordinator.onInlineSelectionChange = onInlineSelectionChange
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
 
@@ -367,6 +381,18 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                     $0.key == documentId || retained.contains($0.key)
                 }
             }
+            // Evict undo stacks + content snapshots for documents no longer
+            // retained (keep the current one); clear actions before dropping.
+            let staleUndoKeys = Set(context.coordinator.undoManagers.keys)
+                .union(context.coordinator.undoContentSnapshots.keys)
+                .filter { key in
+                    key != documentId && key != "__default__" && !retained.contains(key)
+                }
+            for key in staleUndoKeys {
+                context.coordinator.undoManagers[key]?.removeAllActions()
+                context.coordinator.undoManagers.removeValue(forKey: key)
+                context.coordinator.undoContentSnapshots.removeValue(forKey: key)
+            }
         }
 
         let wtActive: Bool = {
@@ -390,6 +416,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
 
         textView.onPasteImage = onPasteImage
+        textView.isCursorExcluded = isCursorExcluded
         textView.setPlaceholder(placeholder)
         // Sync heightBehavior across all three layers (scroll view, text view,
         // coordinator) so a runtime switch fully reconfigures.
@@ -479,8 +506,22 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                retainedScrollDocumentIds?.contains(outgoingId) ?? true {
                 context.coordinator.scrollOffsets[outgoingId] = nsView.contentView.bounds.origin.y
             }
+            // Snapshot the outgoing document's content (storage form) so a later
+            // switch-back can detect a file rewritten while it was backgrounded.
+            // `lastSyncedText` still holds the outgoing content here.
+            if let outgoingId = context.coordinator.documentId {
+                context.coordinator.undoContentSnapshots[outgoingId] = context.coordinator.lastSyncedText
+            }
+            // Per-document undo: close the OUTGOING document's open coalescing group
+            // (while its manager is still active), then switch the active documentId so
+            // `undoManager(for:)` starts vending the INCOMING document's own manager. We
+            // no longer clear undo here — that `removeAllActions()` is what killed Cmd+Z
+            // across a file switch.
+            textView.breakUndoCoalescing()
             context.coordinator.documentId = documentId
-            textView.undoManager?.removeAllActions()
+            // Drop the incoming document's undo stack if its text changed while
+            // switched away — its recorded ranges are now stale.
+            context.coordinator.invalidateUndoIfContentDiverged(for: documentId, incomingText: text)
             context.coordinator.didInitialFormatting = false
             context.coordinator.didEnsureLayoutForCurrentDocument = false
             context.coordinator.resetImageEmbedState()
@@ -525,6 +566,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
 
         context.coordinator.onCaretRectChange = onCaretRectChange
+        context.coordinator.onBuildContextMenu = onBuildContextMenu
         context.coordinator.onInlineSelectionChange = onInlineSelectionChange
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         context.coordinator.didInitialFormatting = true
