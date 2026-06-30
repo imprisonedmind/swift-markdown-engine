@@ -50,7 +50,6 @@ final class IframeEmbedOverlay: NSView {
         configureHeaderButton(revealButton)
         revealButton.image = neutralSymbol("chevron.left.forwardslash.chevron.right", description: "Reveal iframe source")
         revealButton.imagePosition = .imageOnly
-        revealButton.contentTintColor = .secondaryLabelColor
         revealButton.toolTip = "Reveal source"
         revealButton.target = self
         revealButton.action = #selector(revealSource)
@@ -59,7 +58,6 @@ final class IframeEmbedOverlay: NSView {
         configureHeaderButton(deleteButton)
         deleteButton.image = neutralSymbol("trash", description: "Delete iframe")
         deleteButton.imagePosition = .imageOnly
-        deleteButton.contentTintColor = .secondaryLabelColor
         deleteButton.toolTip = "Delete iframe"
         deleteButton.target = self
         deleteButton.action = #selector(deleteIframe)
@@ -68,7 +66,6 @@ final class IframeEmbedOverlay: NSView {
         configureHeaderButton(openButton)
         openButton.image = neutralSymbol("arrow.up.forward.square", description: "Open iframe")
         openButton.imagePosition = .imageOnly
-        openButton.contentTintColor = .secondaryLabelColor
         openButton.toolTip = "Open in window"
         openButton.target = self
         openButton.action = #selector(openInWindow)
@@ -106,7 +103,10 @@ final class IframeEmbedOverlay: NSView {
             return nil
         }
         if point.y <= Self.headerHeight {
-            return super.hitTest(point)
+            for button in [deleteButton, revealButton, openButton] where button.frame.contains(point) {
+                return button
+            }
+            return self
         }
         let webPoint = convert(point, to: webView)
         return webView.hitTest(webPoint) ?? webView
@@ -117,7 +117,7 @@ final class IframeEmbedOverlay: NSView {
         anchorTextLocation = anchorLocation
         if currentURL != url {
             currentURL = url
-            print("[MarkdownEngine][iframe] webview load \(url.absoluteString)")
+            iframeInputLog("overlay load sourceID=\(sourceID) url=\(url.absoluteString)")
             webView.load(URLRequest(url: url))
         }
     }
@@ -131,10 +131,10 @@ final class IframeEmbedOverlay: NSView {
     func handleForwardedMouseDown(with event: NSEvent) -> Bool {
         let point = convert(event.locationInWindow, from: nil)
         guard point.y <= Self.headerHeight else {
-            iframeInputLog("overlay body mouseDown forwarding to webView firstResponder")
-            ownerTextView?.iframeEmbedHasInteractionFocus = true
+            iframeInputLog("overlay body mouseDown forwarding to webView")
+            ownerTextView?.setIframeEmbedInteractionFocus(true)
             window?.makeFirstResponder(webView)
-            super.mouseDown(with: event)
+            webView.mouseDown(with: event)
             return true
         }
         if performHeaderButtonClick(at: point) {
@@ -166,7 +166,7 @@ final class IframeEmbedOverlay: NSView {
         let paragraph = (textView.string as NSString).paragraphRange(for: NSRange(location: anchorTextLocation, length: 0))
         textView.revealedIframeEmbedSourceIDs.insert(sourceID)
         textView.revealedIframeEmbedParagraphLocations.insert(paragraph.location)
-        textView.iframeEmbedHasInteractionFocus = false
+        textView.setIframeEmbedInteractionFocus(false)
         removeFromSuperview()
         textView.iframeEmbedOverlays.removeValue(forKey: sourceID)
         textView.window?.makeFirstResponder(textView)
@@ -204,15 +204,21 @@ final class IframeEmbedOverlay: NSView {
     }
 
     private func neutralSymbol(_ name: String, description: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: description)
-        image?.isTemplate = true
-        return image
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: description)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)) else {
+            return nil
+        }
+        symbol.isTemplate = true
+        return symbol
     }
 
     private func configureHeaderButton(_ button: NSButton) {
-        button.bezelStyle = .texturedRounded
+        button.bezelStyle = .accessoryBarAction
         button.isBordered = true
+        button.controlSize = .small
         button.setButtonType(.momentaryPushIn)
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = .labelColor
         button.focusRingType = .none
     }
 }
@@ -267,57 +273,50 @@ private final class IframeBodyWebView: WKWebView, WKNavigationDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if redirectMouseDownToOwnerIfOutsideBounds(event) {
+            return
+        }
         iframeInputLog("webView mouseDown makeFirstResponder")
-        ownerTextView?.iframeEmbedHasInteractionFocus = true
+        ownerTextView?.setIframeEmbedInteractionFocus(true)
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
     }
 
     override func rightMouseDown(with event: NSEvent) {
         iframeInputLog("webView rightMouseDown makeFirstResponder")
-        ownerTextView?.iframeEmbedHasInteractionFocus = true
+        ownerTextView?.setIframeEmbedInteractionFocus(true)
         window?.makeFirstResponder(self)
         super.rightMouseDown(with: event)
     }
 
     override func otherMouseDown(with event: NSEvent) {
         iframeInputLog("webView otherMouseDown makeFirstResponder")
-        ownerTextView?.iframeEmbedHasInteractionFocus = true
+        ownerTextView?.setIframeEmbedInteractionFocus(true)
         window?.makeFirstResponder(self)
         super.otherMouseDown(with: event)
     }
 
-    override func keyDown(with event: NSEvent) {
-        iframeInputLog("webView keyDown key=\(event.charactersIgnoringModifiers ?? "nil") chars=\(event.characters ?? "nil") modifiers=\(event.modifierFlags.rawValue)")
-        ownerTextView?.iframeEmbedHasInteractionFocus = true
-        super.keyDown(with: event)
-    }
-
-    override func keyUp(with event: NSEvent) {
-        iframeInputLog("webView keyUp key=\(event.charactersIgnoringModifiers ?? "nil") chars=\(event.characters ?? "nil") modifiers=\(event.modifierFlags.rawValue)")
-        super.keyUp(with: event)
-    }
-
-    override func insertText(_ insertString: Any) {
-        iframeInputLog("webView insertText swallowed value=\(String(describing: insertString))")
-    }
-
-    override func doCommand(by selector: Selector) {
-        iframeInputLog("webView doCommand swallowed selector=\(NSStringFromSelector(selector))")
+    private func redirectMouseDownToOwnerIfOutsideBounds(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        guard !bounds.contains(point), let ownerTextView else {
+            return false
+        }
+        iframeInputLog("webView mouseDown outside bounds redirecting to textView point=\(Int(point.x)),\(Int(point.y)) bounds=\(Int(bounds.width))x\(Int(bounds.height))")
+        ownerTextView.setIframeEmbedInteractionFocus(false)
+        ownerTextView.window?.makeFirstResponder(ownerTextView)
+        ownerTextView.iframeEmbedIsRedirectingMouseDown = true
+        defer { ownerTextView.iframeEmbedIsRedirectingMouseDown = false }
+        ownerTextView.mouseDown(with: event)
+        return true
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         iframeInputLog("webView performKeyEquivalent key=\(event.charactersIgnoringModifiers ?? "nil") chars=\(event.characters ?? "nil") modifiers=\(event.modifierFlags.rawValue)")
-        if event.type == .keyDown,
-           event.charactersIgnoringModifiers == " ",
-           event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            iframeInputLog("webView consumed trailing plain space keyEquivalent")
-            return true
-        }
         let handled = super.performKeyEquivalent(with: event)
         iframeInputLog("webView performKeyEquivalent handled=\(handled)")
         return handled
     }
+
 }
 
 private final class IframeEmbedWindow: NSWindow {
@@ -357,7 +356,7 @@ func iframeInputLog(_ message: String) {
     if FileManager.default.fileExists(atPath: url.path) {
         if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         }
     } else {
